@@ -1,5 +1,5 @@
 use nalgebra::{ComplexField, Dyn, Scalar, Storage, Vector};
-use num_traits::{NumAssign, One, Zero};
+use num_traits::{FromPrimitive, NumAssign, One, Zero};
 use std::fmt::Debug;
 
 use crate::{ConvexConstraints, PrimalDual};
@@ -13,7 +13,14 @@ pub fn backtrack_line_search<P, S1, S2>(
 ) -> P::F
 where
     P: PrimalDual + ConvexConstraints,
-    P::F: Debug + Scalar + ComplexField<RealField = P::F> + NumAssign + PartialOrd + Copy + Zero,
+    P::F: Debug
+        + Scalar
+        + ComplexField<RealField = P::F>
+        + NumAssign
+        + PartialOrd
+        + Copy
+        + Zero
+        + FromPrimitive,
     S1: Storage<P::F, Dyn> + Debug,
     S2: Storage<P::F, Dyn> + Debug,
 {
@@ -24,6 +31,8 @@ where
     let nconstr = problem.number_of_constraints();
     let mut constraints = vec![P::F::zero(); nconstr];
 
+    let eps = P::F::from_f64(1e-9).unwrap();
+
     loop {
         let candidate = xv + dir_xv * t;
         let x_candidate = candidate.rows(0, dims).into_owned();
@@ -33,7 +42,7 @@ where
 
         let bound = (P::F::one() - t * alpha) * residual_at_xv;
 
-        let residual_too_large = problem.residual(&candidate).norm_squared() > bound * bound;
+        let residual_too_large = problem.residual(&candidate).norm_squared() > bound * bound + eps;
 
         if !infeasible && !residual_too_large {
             return t;
