@@ -18,19 +18,17 @@ struct LinearDiscrimination {
 impl CostFunction for LinearDiscrimination {
     type F = f32;
 
-    fn cost<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Self::F
+    fn cost<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut Self::F)
     where
         Self::F: Debug + Num + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        println!("nrows: {}", param.nrows());
-
         let a = param.rows(0, 2);
         // let b = param.rows(2, 1);
         let u = param.rows(3, self.xs.len());
         let v = param.rows(3 + self.xs.len(), self.ys.len());
 
-        a.norm() + self.gamma * (u.sum() + v.sum())
+        *out = a.norm() + self.gamma * (u.sum() + v.sum())
     }
 
     fn dims(&self) -> usize {
@@ -39,13 +37,12 @@ impl CostFunction for LinearDiscrimination {
 }
 
 impl Gradient for LinearDiscrimination {
-    fn gradient<S>(&self, param: &Vector<Self::F, Dyn, S>) -> OVector<Self::F, Dyn>
+    fn gradient<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut OVector<Self::F, Dyn>)
     where
         Self::F: Debug + Num + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let dim = self.dims();
-        let mut g = OVector::<Self::F, Dyn>::zeros(dim);
+        out.fill(0.0);
 
         // layout: a (2) | b (1) | u (nx) | v (ny)
         let a = param.rows(0, 2).into_owned();
@@ -56,7 +53,7 @@ impl Gradient for LinearDiscrimination {
         let norm_a = a.norm();
         if norm_a != 0.0 {
             let grad_a = &a / norm_a;
-            g.rows_mut(0, 2).copy_from(&grad_a);
+            out.rows_mut(0, 2).copy_from(&grad_a);
         } // else leave zeros (subgradient choice)
 
         // b has no contribution -> gradient 0 (already zero)
@@ -66,25 +63,22 @@ impl Gradient for LinearDiscrimination {
         let start_v = 3 + nx;
         if nx > 0 {
             let ones_u = OVector::<Self::F, Dyn>::from_element(nx, self.gamma);
-            g.rows_mut(start_u, nx).copy_from(&ones_u);
+            out.rows_mut(start_u, nx).copy_from(&ones_u);
         }
         if ny > 0 {
             let ones_v = OVector::<Self::F, Dyn>::from_element(ny, self.gamma);
-            g.rows_mut(start_v, ny).copy_from(&ones_v);
+            out.rows_mut(start_v, ny).copy_from(&ones_v);
         }
-
-        g
     }
 }
 
 impl Hessian for LinearDiscrimination {
-    fn hessian<S>(&self, _param: &Vector<Self::F, Dyn, S>) -> OMatrix<Self::F, Dyn, Dyn>
+    fn hessian<S>(&mut self, _param: &Vector<Self::F, Dyn, S>, out: &mut OMatrix<Self::F, Dyn, Dyn>)
     where
         Self::F: Debug + Num + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let dim = self.dims();
-        let mut h = OMatrix::<Self::F, Dyn, Dyn>::zeros(dim, dim);
+        out.fill(0.0);
 
         // Only a-block (top-left 2x2) is nonzero:
         // H_a = (I / ||a||) - (a a^T / ||a||^3)
@@ -99,12 +93,10 @@ impl Hessian for LinearDiscrimination {
             let ha = (&i2) / norm_a - (&aa_t) / (norm_a * norm_a * norm_a);
 
             // copy ha into top-left block of h
-            let mut block = h.view_mut((0, 0), (2, 2));
+            let mut block = out.view_mut((0, 0), (2, 2));
             block.copy_from(&ha);
         }
         // all other second derivatives are zero because cost is linear in b,u,v and uses only ||a|| for quadratic part.
-
-        h
     }
 }
 
@@ -171,7 +163,7 @@ impl ConvexConstraints for LinearDiscrimination {
 
         // -v_i
         for i in 0..m {
-            let g = &mut out[n+m+n+i];
+            let g = &mut out[n + m + n + i];
             g.fill(0.0);
             g[3 + n + i] = -Self::F::one();
         }
@@ -229,7 +221,11 @@ fn main() {
 
     let start = Instant::now();
 
-    let disc = LinearDiscrimination { xs: x, ys: y, gamma: 1.0 };
+    let mut disc = LinearDiscrimination {
+        xs: x,
+        ys: y,
+        gamma: 1.0,
+    };
 
     let mut constraints = vec![0.0; disc.number_of_constraints()];
     disc.convex_constraints(&x0, &mut constraints);
@@ -237,7 +233,7 @@ fn main() {
     println!("{constraints:?}");
 
     // let sol = newtons_method(&disc, &x0, 1e-20, 0.3, 0.8);
-    let sol = barrier_method(&disc, &x0, 0.1, 5.0, 1e-5, 1e-3, 0.3, 0.8);
+    let sol = barrier_method(&mut disc, &x0, 0.1, 5.0, 1e-5, 1e-3, 0.3, 0.8);
 
     let dur = start.elapsed();
 

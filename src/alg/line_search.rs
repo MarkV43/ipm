@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use crate::{ConvexConstraints, PrimalDual};
 
 pub fn backtrack_line_search<P, S1, S2>(
-    problem: &P,
+    problem: &mut P,
     xv: &Vector<P::F, Dyn, S1>,
     dir_xv: &Vector<P::F, Dyn, S2>,
     alpha: P::F,

@@ -2,8 +2,8 @@ use crate::{
     ConvexConstraints, CostFunction, Gradient, Hessian, LinearConstraints, PrimalDual,
     alg::line_search::backtrack_line_search,
 };
-use nalgebra::{ComplexField, DVector, Dyn, OVector, Scalar, Storage, Vector, stack};
-use num_traits::{FromPrimitive, NumAssign};
+use nalgebra::{ComplexField, DMatrix, DVector, Dyn, OVector, Scalar, Storage, Vector, stack};
+use num_traits::{FromPrimitive, NumAssign, Zero};
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,7 +14,7 @@ pub struct NewtonsMethodSolution<F: Scalar> {
 
 #[must_use]
 pub fn newtons_method<P, S>(
-    problem: &P,
+    problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
     tolerance: P::F,
     alpha: P::F,
@@ -28,7 +28,8 @@ where
         + ComplexField<RealField = P::F>
         + PartialOrd
         + Copy
-        + FromPrimitive,
+        + FromPrimitive
+        + Zero,
     S: Storage<P::F, Dyn> + Debug,
 {
     let tol2 = tolerance * tolerance;
@@ -44,9 +45,12 @@ where
 
     let mut its = 0;
 
+    let mut hessian = DMatrix::zeros(dims, dims);
+    let mut gradient = DVector::zeros(dims);
+
     loop {
-        let hessian = problem.hessian(&x);
-        let gradient = problem.gradient(&x);
+        problem.hessian(&x, &mut hessian);
+        problem.gradient(&x, &mut gradient);
 
         let new_a = stack![hessian, &mat_at; &mat_a, 0];
         let new_b = -stack![gradient; &mat_a * &x - &vec_b];
@@ -84,8 +88,8 @@ where
         its += 1;
     }
 
-    NewtonsMethodSolution {
-        cost: problem.cost(&x),
-        arg: x,
-    }
+    let mut cost = P::F::zero();
+    problem.cost(&x, &mut cost);
+
+    NewtonsMethodSolution { cost, arg: x }
 }

@@ -7,7 +7,7 @@ pub mod alg;
 pub trait CostFunction {
     type F;
 
-    fn cost<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Self::F
+    fn cost<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut Self::F)
     where
         Self::F: Debug + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug;
@@ -16,14 +16,14 @@ pub trait CostFunction {
 }
 
 pub trait Gradient: CostFunction {
-    fn gradient<S>(&self, param: &Vector<Self::F, Dyn, S>) -> DVector<Self::F>
+    fn gradient<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut DVector<Self::F>)
     where
         Self::F: Debug + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug;
 }
 
 pub trait Hessian: Gradient {
-    fn hessian<S>(&self, param: &Vector<Self::F, Dyn, S>) -> DMatrix<Self::F>
+    fn hessian<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut DMatrix<Self::F>)
     where
         Self::F: Debug + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug;
@@ -58,7 +58,7 @@ pub trait ConvexConstraints: Hessian {
 }
 
 pub trait PrimalDual: CostFunction {
-    fn residual<S>(&self, xv: &Vector<Self::F, Dyn, S>) -> DVector<Self::F>
+    fn residual<S>(&mut self, xv: &Vector<Self::F, Dyn, S>) -> DVector<Self::F>
     where
         Self::F: Debug + Scalar + NumAssign,
         S: Storage<Self::F, Dyn> + Debug;
@@ -68,7 +68,7 @@ impl<T> PrimalDual for T
 where
     T: Gradient + LinearConstraints,
 {
-    fn residual<S>(&self, xv: &Vector<Self::F, Dyn, S>) -> DVector<Self::F>
+    fn residual<S>(&mut self, xv: &Vector<Self::F, Dyn, S>) -> DVector<Self::F>
     where
         Self::F: Debug + Scalar + NumAssign,
         S: Storage<Self::F, Dyn> + Debug,
@@ -80,7 +80,8 @@ where
         let x = xv.rows(0, dims);
         let v = xv.rows_range(dims..);
 
-        let grad = self.gradient(&x);
+        let mut grad = DVector::zeros(dims);
+        self.gradient(&x, &mut grad);
 
         let r_dual = grad + mat_a.tr_mul(&v);
         let r_primal = mat_a * x - vec_b;

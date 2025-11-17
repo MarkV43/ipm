@@ -9,8 +9,11 @@ use crate::{
 };
 
 pub struct BarrierProblem<'a, P: CostFunction> {
-    problem: &'a P,
+    problem: &'a mut P,
     accuracy: P::F,
+    const_buffer: Vec<P::F>,
+    const_grad_buffer: Vec<DVector<P::F>>,
+    const_hess_buffer: Vec<DMatrix<P::F>>,
 }
 
 impl<'a, P> CostFunction for BarrierProblem<'a, P>
@@ -20,19 +23,24 @@ where
 {
     type F = P::F;
 
-    fn cost<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Self::F
+    fn cost<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut Self::F)
     where
         Self::F: Debug + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let cost = self.problem.cost(param);
+        let mut cost = P::F::zero();
+        self.problem.cost(param, &mut cost);
 
-        let nconstr = self.problem.number_of_constraints();
-        let mut constr = vec![P::F::zero(); nconstr];
-        self.problem.convex_constraints(param, &mut constr);
+        debug_assert_eq!(
+            self.const_buffer.len(),
+            self.problem.number_of_constraints()
+        );
+        self.problem
+            .convex_constraints(param, &mut self.const_buffer);
 
         let h = -self.accuracy.inv();
-        cost + h * constr.into_iter().map(|x| (-x).ln()).sum()
+        let res = cost + h * self.const_buffer.iter().map(|&x| (-x).ln()).sum();
+        *out = res;
     }
 
     fn dims(&self) -> usize {
@@ -45,28 +53,30 @@ where
     P: ConvexConstraints,
     P::F: Real + Inv<Output = P::F> + Sum + NumAssign,
 {
-    fn gradient<S>(&self, param: &Vector<Self::F, Dyn, S>) -> nalgebra::DVector<Self::F>
+    fn gradient<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut DVector<Self::F>)
     where
         Self::F: Debug + Scalar + Num,
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let mut out = self.problem.gradient(param);
+        self.problem.gradient(param, out);
 
-        let nconstr = self.problem.number_of_constraints();
-        let mut grads = vec![DVector::zeros(self.dims()); nconstr];
-        let mut costs = vec![P::F::zero(); nconstr];
-        self.problem.convex_gradients(param, &mut grads);
-        self.problem.convex_constraints(param, &mut costs);
+        debug_assert_eq!(
+            self.const_grad_buffer.len(),
+            self.problem.number_of_constraints()
+        );
+
+        self.problem
+            .convex_constraints(param, &mut self.const_buffer);
+        self.problem
+            .convex_gradients(param, &mut self.const_grad_buffer);
 
         // barrier multiplier (must be negative)
         let h = -self.accuracy.inv();
 
-        for (g, c) in grads.into_iter().zip(costs.into_iter()) {
+        for (g, c) in self.const_grad_buffer.iter().zip(self.const_buffer.iter()) {
             let ci = c.inv(); // 1 / f_i
-            out += g * h * ci; // add h * g / f_i
+            *out += g * h * ci; // add h * g / f_i
         }
-
-        out
     }
 }
 
@@ -75,39 +85,39 @@ where
     P: ConvexConstraints,
     P::F: Real + Inv<Output = P::F> + Sum + NumAssign,
 {
-    fn hessian<S>(&self, param: &Vector<Self::F, Dyn, S>) -> nalgebra::DMatrix<Self::F>
+    fn hessian<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut DMatrix<Self::F>)
     where
         Self::F: Debug + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let mut out = self.problem.hessian(param);
+        self.problem.hessian(param, out);
 
-        let nvar = param.nrows();
-        let nconst = self.problem.number_of_constraints();
+        debug_assert_eq!(
+            self.const_hess_buffer.len(),
+            self.problem.number_of_constraints()
+        );
 
-        let mut hessians = vec![DMatrix::zeros(nvar, nvar); nconst];
-        let mut grads = vec![DVector::zeros(nvar); nconst];
-        let mut costs = vec![P::F::zero(); nconst];
-
-        self.problem.convex_hessians(param, &mut hessians);
-        self.problem.convex_gradients(param, &mut grads);
-        self.problem.convex_constraints(param, &mut costs);
+        self.problem
+            .convex_hessians(param, &mut self.const_hess_buffer);
+        self.problem
+            .convex_gradients(param, &mut self.const_grad_buffer);
+        self.problem
+            .convex_constraints(param, &mut self.const_buffer);
 
         // barrier multiplier (must be negative)
         let h = -self.accuracy.inv();
 
-        for (hi, (g, c)) in hessians
-            .into_iter()
-            .zip(grads.into_iter().zip(costs.into_iter()))
+        for (hi, (g, c)) in self
+            .const_hess_buffer
+            .iter()
+            .zip(self.const_grad_buffer.iter().zip(self.const_buffer.iter()))
         {
             let ci = c.inv(); // 1 / f_i
             // term = (H_f / f_i) - (g g^T / f_i^2)
-            let term = hi * ci - (&g * g.transpose()) * (ci * ci);
+            let term = hi * ci - (g * g.transpose()) * (ci * ci);
             // multiply by h and add to total Hessian
-            out += term * h;
+            *out += term * h;
         }
-
-        out
     }
 }
 
@@ -164,7 +174,7 @@ where
 }
 
 pub fn barrier_method<P, S>(
-    problem: &P,
+    problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
     t0: P::F,
     mu: P::F,
@@ -196,42 +206,49 @@ where
     problem.convex_constraints(x0, &mut constraints);
     assert!(constraints.iter().all(|&x| x <= P::F::zero()));
 
-    let n_constraints = P::F::from_usize(constraints.len()).unwrap();
+    let nvar = problem.dims();
 
     let mut barrier = BarrierProblem {
         problem,
         accuracy: t0,
+        const_buffer: vec![P::F::zero(); nconstr],
+        const_grad_buffer: vec![DVector::zeros(nvar); nconstr],
+        const_hess_buffer: vec![DMatrix::zeros(nvar, nvar); nconstr],
     };
+
+    let nconstr = P::F::from_usize(nconstr).unwrap();
 
     let mut x = x0.clone_owned();
 
     loop {
-        let new_x = newtons_method(&barrier, &x, centering_tolerance, alpha, beta).arg;
+        let new_x = newtons_method(&mut barrier, &x, centering_tolerance, alpha, beta).arg;
 
         // println!("=====  Step  =====");
         // println!("Cost = {}", problem.cost(&x));
 
         x = new_x;
 
-        if n_constraints / barrier.accuracy < tolerance {
+        if nconstr / barrier.accuracy < tolerance {
             break;
         }
 
         barrier.accuracy *= mu;
     }
 
-    let sol = NewtonsMethodSolution {
-        cost: problem.cost(&x),
-        arg: x,
-    };
+    let mut bcost = P::F::zero();
+    barrier.cost(&x, &mut bcost);
+
+    let mut cost = P::F::zero();
+    problem.cost(&x, &mut cost);
+
+    let sol = NewtonsMethodSolution { cost, arg: x };
 
     problem.convex_constraints(&sol.arg, &mut constraints);
 
     println!("\n");
     println!("x = {:?}", sol.arg.as_slice());
-    println!("cost = {}", problem.cost(&sol.arg));
-    println!("bcost = {}", barrier.cost(&sol.arg));
-    println!("grad = {:?}", problem.gradient(&sol.arg).as_slice());
+    println!("cost = {}", sol.cost);
+    println!("bcost = {}", bcost);
     println!("cnvx = {:?}", constraints.as_slice());
 
     sol
