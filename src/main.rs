@@ -148,39 +148,32 @@ impl ConvexConstraints for LinearDiscrimination {
 
         // b[0] - a.dot(x_i) - u_i + 1
         for i in 0..n {
-            let mut g = DVector::zeros(self.dims());
-
+            let g = &mut out[i];
             g.rows_generic_mut(0, Const::<2>).copy_from(&-self.xs[i]);
             g[2] = Self::F::one();
             g[3 + i] = -Self::F::one();
-
-            out[i] = g;
         }
 
         // a.dot(y_i) - b[0] - v_i + 1
         for i in 0..m {
-            let mut g = DVector::zeros(self.dims());
-
-            // FIXED: use self.y[i], not self.x[i]
+            let g = &mut out[n + i];
             g.rows_generic_mut(0, Const::<2>).copy_from(&self.ys[i]);
             g[2] = -Self::F::one();
             g[3 + n + i] = -Self::F::one();
-
-            out[n + i] = g;
         }
 
         // -u_i
         for i in 0..n {
-            let mut g = DVector::zeros(self.dims());
+            let g = &mut out[n + m + i];
+            g.fill(0.0);
             g[3 + i] = -Self::F::one();
-            out[n + m + i] = g;
         }
 
         // -v_i
         for i in 0..m {
-            let mut g = DVector::zeros(self.dims());
+            let g = &mut out[n+m+n+i];
+            g.fill(0.0);
             g[3 + n + i] = -Self::F::one();
-            out[n + m + n + i] = g;
         }
     }
 
@@ -188,7 +181,7 @@ impl ConvexConstraints for LinearDiscrimination {
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        out.fill(DMatrix::zeros(self.dims(), self.dims()));
+        out.iter_mut().for_each(|x| x.fill(0.0));
     }
 }
 

@@ -63,7 +63,7 @@ where
 
         for (g, c) in grads.into_iter().zip(costs.into_iter()) {
             let ci = c.inv(); // 1 / f_i
-            out += g * (h * ci); // add h * g / f_i
+            out += g * h * ci; // add h * g / f_i
         }
 
         out
