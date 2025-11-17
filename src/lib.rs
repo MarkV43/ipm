@@ -42,17 +42,15 @@ pub trait LinearConstraints: CostFunction {
 
 /// Constrains the problem to $f_i(x) \leq 0, i=1,\dots,m$
 pub trait ConvexConstraints: Hessian {
-    fn number_of_constraints(&self) -> usize;
-
-    fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
+    fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Vec<Self::F>
     where
         S: RawStorage<Self::F, Dyn> + Debug;
 
-    fn convex_gradients<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [DVector<Self::F>])
+    fn convex_gradients<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Vec<DVector<Self::F>>
     where
         S: RawStorage<Self::F, Dyn> + Debug;
 
-    fn convex_hessians<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [DMatrix<Self::F>])
+    fn convex_hessians<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Vec<DMatrix<Self::F>>
     where
         S: RawStorage<Self::F, Dyn> + Debug;
 }
