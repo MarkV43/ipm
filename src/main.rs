@@ -10,8 +10,8 @@ use nalgebra::{
 use num_traits::{Num, One};
 
 struct LinearDiscrimination {
-    xs: Vec<Vector2<f32>>,
-    ys: Vec<Vector2<f32>>,
+    x: Vec<Vector2<f32>>,
+    y: Vec<Vector2<f32>>,
     gamma: f32,
 }
 
@@ -27,14 +27,14 @@ impl CostFunction for LinearDiscrimination {
 
         let a = param.rows(0, 2);
         // let b = param.rows(2, 1);
-        let u = param.rows(3, self.xs.len());
-        let v = param.rows(3 + self.xs.len(), self.ys.len());
+        let u = param.rows(3, self.x.len());
+        let v = param.rows(3 + self.x.len(), self.y.len());
 
         a.norm() + self.gamma * (u.sum() + v.sum())
     }
 
     fn dims(&self) -> usize {
-        self.xs.len() + self.ys.len() + 3
+        self.x.len() + self.y.len() + 3
     }
 }
 
@@ -49,8 +49,8 @@ impl Gradient for LinearDiscrimination {
 
         // layout: a (2) | b (1) | u (nx) | v (ny)
         let a = param.rows(0, 2).into_owned();
-        let nx = self.xs.len();
-        let ny = self.ys.len();
+        let nx = self.x.len();
+        let ny = self.y.len();
 
         // gradient wrt a: a / ||a||  (choose 0 when ||a|| == 0)
         let norm_a = a.norm();
@@ -109,52 +109,54 @@ impl Hessian for LinearDiscrimination {
 }
 
 impl ConvexConstraints for LinearDiscrimination {
-    fn number_of_constraints(&self) -> usize {
-        2 * (self.xs.len() + self.ys.len())
-    }
-
-    fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
+    fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Vec<Self::F>
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let n = self.xs.len();
-        let m = self.ys.len();
+        let n = self.x.len();
+        let m = self.y.len();
 
         let a = param.rows_generic(0, Const::<2>);
         let b = param.rows_generic(2, Const::<1>);
         let u = param.rows(3, n);
         let v = param.rows(3 + n, m);
 
+        let mut out = Vec::with_capacity(2 * (n + m));
+
         for i in 0..n {
-            out[i] = b[0] - a.dot(&self.xs[i]) - u[i] + Self::F::one();
+            out.push(b[0] - a.dot(&self.x[i]) - u[i] + Self::F::one());
         }
         for i in 0..m {
-            out[n + i] = a.dot(&self.ys[i]) - b[0] - v[i] + Self::F::one();
+            out.push(a.dot(&self.y[i]) - b[0] - v[i] + Self::F::one());
         }
         for i in 0..n {
-            out[n + m + i] = -u[i];
+            out.push(-u[i]);
         }
         for i in 0..m {
-            out[n + m + n + i] = -v[i];
+            out.push(-v[i]);
         }
+
+        out
     }
 
-    fn convex_gradients<S>(&self, _param: &Vector<Self::F, Dyn, S>, out: &mut [DVector<Self::F>])
+    fn convex_gradients<S>(&self, _param: &Vector<Self::F, Dyn, S>) -> Vec<DVector<Self::F>>
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let n = self.xs.len();
-        let m = self.ys.len();
+        let n = self.x.len();
+        let m = self.y.len();
+
+        let mut out = Vec::with_capacity(2 * (n + m));
 
         // b[0] - a.dot(x_i) - u_i + 1
         for i in 0..n {
             let mut g = DVector::zeros(self.dims());
 
-            g.rows_generic_mut(0, Const::<2>).copy_from(&-self.xs[i]);
+            g.rows_generic_mut(0, Const::<2>).copy_from(&-self.x[i]);
             g[2] = Self::F::one();
             g[3 + i] = -Self::F::one();
 
-            out[i] = g;
+            out.push(g);
         }
 
         // a.dot(y_i) - b[0] - v_i + 1
@@ -162,33 +164,38 @@ impl ConvexConstraints for LinearDiscrimination {
             let mut g = DVector::zeros(self.dims());
 
             // FIXED: use self.y[i], not self.x[i]
-            g.rows_generic_mut(0, Const::<2>).copy_from(&self.ys[i]);
+            g.rows_generic_mut(0, Const::<2>).copy_from(&self.y[i]);
             g[2] = -Self::F::one();
             g[3 + n + i] = -Self::F::one();
 
-            out[n + i] = g;
+            out.push(g);
         }
 
         // -u_i
         for i in 0..n {
             let mut g = DVector::zeros(self.dims());
             g[3 + i] = -Self::F::one();
-            out[n + m + i] = g;
+            out.push(g);
         }
 
         // -v_i
         for i in 0..m {
             let mut g = DVector::zeros(self.dims());
             g[3 + n + i] = -Self::F::one();
-            out[n + m + n + i] = g;
+            out.push(g);
         }
+
+        out
     }
 
-    fn convex_hessians<S>(&self, _param: &Vector<Self::F, Dyn, S>, out: &mut [DMatrix<Self::F>])
+    fn convex_hessians<S>(&self, _param: &Vector<Self::F, Dyn, S>) -> Vec<DMatrix<Self::F>>
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        out.fill(DMatrix::zeros(self.dims(), self.dims()));
+        let n = self.x.len();
+        let m = self.y.len();
+
+        vec![DMatrix::zeros(self.dims(), self.dims()); 2 * (n + m)]
     }
 }
 
@@ -236,15 +243,21 @@ fn main() {
 
     let start = Instant::now();
 
-    let disc = LinearDiscrimination { xs: x, ys: y, gamma: 1.0 };
+    let disc = LinearDiscrimination { x, y, gamma: 1.0 };
 
-    let mut constraints = vec![0.0; disc.number_of_constraints()];
-    disc.convex_constraints(&x0, &mut constraints);
-
-    println!("{constraints:?}");
+    println!("{:?}", disc.convex_constraints(&x0));
 
     // let sol = newtons_method(&disc, &x0, 1e-20, 0.3, 0.8);
-    let sol = barrier_method(&disc, &x0, 0.1, 5.0, 1e-5, 1e-3, 0.3, 0.8);
+    let sol = barrier_method(
+        &disc,
+        &x0,
+        0.1,
+        5.0,
+        1e-5,
+        1e-3,
+        0.3,
+        0.8,
+    );
 
     let dur = start.elapsed();
 

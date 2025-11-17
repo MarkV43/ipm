@@ -1,6 +1,8 @@
 use std::{fmt::Debug, iter::Sum};
 
-use nalgebra::{ComplexField, DMatrix, DVector, Dyn, RawStorage, Scalar, Storage, Vector};
+use nalgebra::{
+    ComplexField, DMatrix, DVector, Dyn, RawStorage, Scalar, Storage, StorageMut, Vector, dvector,
+};
 use num_traits::{Float, FromPrimitive, Inv, Num, NumAssign, One, Zero, real::Real};
 
 use crate::{
@@ -15,7 +17,7 @@ pub struct BarrierProblem<'a, P: CostFunction> {
 
 impl<'a, P> CostFunction for BarrierProblem<'a, P>
 where
-    P: ConvexConstraints,
+    P: CostFunction + ConvexConstraints,
     P::F: Real + Inv<Output = P::F> + Sum,
 {
     type F = P::F;
@@ -26,10 +28,7 @@ where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
         let cost = self.problem.cost(param);
-
-        let nconstr = self.problem.number_of_constraints();
-        let mut constr = vec![P::F::zero(); nconstr];
-        self.problem.convex_constraints(param, &mut constr);
+        let constr = self.problem.convex_constraints(param);
 
         let h = -self.accuracy.inv();
         cost + h * constr.into_iter().map(|x| (-x).ln()).sum()
@@ -42,7 +41,7 @@ where
 
 impl<'a, P> Gradient for BarrierProblem<'a, P>
 where
-    P: ConvexConstraints,
+    P: Gradient + ConvexConstraints,
     P::F: Real + Inv<Output = P::F> + Sum + NumAssign,
 {
     fn gradient<S>(&self, param: &Vector<Self::F, Dyn, S>) -> nalgebra::DVector<Self::F>
@@ -52,11 +51,8 @@ where
     {
         let mut out = self.problem.gradient(param);
 
-        let nconstr = self.problem.number_of_constraints();
-        let mut grads = vec![DVector::zeros(self.dims()); nconstr];
-        let mut costs = vec![P::F::zero(); nconstr];
-        self.problem.convex_gradients(param, &mut grads);
-        self.problem.convex_constraints(param, &mut costs);
+        let grads = self.problem.convex_gradients(param);
+        let costs = self.problem.convex_constraints(param);
 
         // barrier multiplier (must be negative)
         let h = -self.accuracy.inv();
@@ -72,7 +68,7 @@ where
 
 impl<'a, P> Hessian for BarrierProblem<'a, P>
 where
-    P: ConvexConstraints,
+    P: Hessian + ConvexConstraints,
     P::F: Real + Inv<Output = P::F> + Sum + NumAssign,
 {
     fn hessian<S>(&self, param: &Vector<Self::F, Dyn, S>) -> nalgebra::DMatrix<Self::F>
@@ -82,16 +78,9 @@ where
     {
         let mut out = self.problem.hessian(param);
 
-        let nvar = param.nrows();
-        let nconst = self.problem.number_of_constraints();
-
-        let mut hessians = vec![DMatrix::zeros(nvar, nvar); nconst];
-        let mut grads = vec![DVector::zeros(nvar); nconst];
-        let mut costs = vec![P::F::zero(); nconst];
-
-        self.problem.convex_hessians(param, &mut hessians);
-        self.problem.convex_gradients(param, &mut grads);
-        self.problem.convex_constraints(param, &mut costs);
+        let hessians = self.problem.convex_hessians(param);
+        let grads = self.problem.convex_gradients(param);
+        let costs = self.problem.convex_constraints(param);
 
         // barrier multiplier (must be negative)
         let h = -self.accuracy.inv();
@@ -136,30 +125,25 @@ where
     P: ConvexConstraints,
     P::F: Inv<Output = P::F> + Sum + Scalar + Float + NumAssign,
 {
-    #[inline]
-    fn number_of_constraints(&self) -> usize {
-        self.problem.number_of_constraints()
-    }
-
-    fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
+    fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Vec<Self::F>
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        self.problem.convex_constraints(param, out)
+        self.problem.convex_constraints(param)
     }
 
-    fn convex_gradients<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [DVector<Self::F>])
+    fn convex_gradients<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Vec<DVector<Self::F>>
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        self.problem.convex_gradients(param, out)
+        self.problem.convex_gradients(param)
     }
 
-    fn convex_hessians<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [DMatrix<Self::F>])
+    fn convex_hessians<S>(&self, param: &Vector<Self::F, Dyn, S>) -> Vec<DMatrix<Self::F>>
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        self.problem.convex_hessians(param, out)
+        self.problem.convex_hessians(param)
     }
 }
 
@@ -191,11 +175,8 @@ where
 {
     assert!(mu > P::F::one());
 
-    let nconstr = problem.number_of_constraints();
-    let mut constraints = vec![P::F::zero(); nconstr];
-    problem.convex_constraints(x0, &mut constraints);
+    let constraints = problem.convex_constraints(x0);
     assert!(constraints.iter().all(|&x| x <= P::F::zero()));
-
     let n_constraints = P::F::from_usize(constraints.len()).unwrap();
 
     let mut barrier = BarrierProblem {
@@ -225,14 +206,15 @@ where
         arg: x,
     };
 
-    problem.convex_constraints(&sol.arg, &mut constraints);
-
     println!("\n");
     println!("x = {:?}", sol.arg.as_slice());
     println!("cost = {}", problem.cost(&sol.arg));
     println!("bcost = {}", barrier.cost(&sol.arg));
     println!("grad = {:?}", problem.gradient(&sol.arg).as_slice());
-    println!("cnvx = {:?}", constraints.as_slice());
+    println!(
+        "cnvx = {:?}",
+        problem.convex_constraints(&sol.arg).as_slice()
+    );
 
     sol
 }
