@@ -1,10 +1,17 @@
 use std::{f32, fmt::Debug, time::Instant};
 
-use ipm::{alg::barrier::barrier_method, *};
-use nalgebra::{
-    Const, DMatrix, DVector, Dyn, OMatrix, OVector, RawStorage, Scalar, Vector, Vector2,
+use ipm::{
+    alg::{
+        barrier::{BarrierParams, barrier_method},
+        line_search::LineSearchParams,
+        newton::NewtonParams,
+    },
+    *,
 };
-use num_traits::{Num, One};
+use nalgebra::{
+    Const, DMatrix, DVector, Dyn, Matrix, OMatrix, OVector, RawStorage, StorageMut, Vector, Vector2,
+};
+use num_traits::One;
 
 struct LinearDiscrimination {
     xs: Vec<Vector2<f32>>,
@@ -17,7 +24,6 @@ impl CostFunction for LinearDiscrimination {
 
     fn cost<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut Self::F)
     where
-        Self::F: Debug + Num + Scalar,
         S: RawStorage<Self::F, Dyn> + Debug,
     {
         let a = param.rows(0, 2);
@@ -34,10 +40,13 @@ impl CostFunction for LinearDiscrimination {
 }
 
 impl Gradient for LinearDiscrimination {
-    fn gradient<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut OVector<Self::F, Dyn>)
-    where
-        Self::F: Debug + Num + Scalar,
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn gradient<S1, S2>(
+        &mut self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut Vector<Self::F, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn> + Debug,
     {
         out.fill(0.0);
 
@@ -70,10 +79,13 @@ impl Gradient for LinearDiscrimination {
 }
 
 impl Hessian for LinearDiscrimination {
-    fn hessian<S>(&mut self, _param: &Vector<Self::F, Dyn, S>, out: &mut OMatrix<Self::F, Dyn, Dyn>)
-    where
-        Self::F: Debug + Num + Scalar,
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn hessian<S1, S2>(
+        &mut self,
+        _param: &Vector<Self::F, Dyn, S1>,
+        out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
         out.fill(0.0);
 
@@ -128,9 +140,13 @@ impl ConvexConstraints for LinearDiscrimination {
         }
     }
 
-    fn convex_gradients<S>(&self, _param: &Vector<Self::F, Dyn, S>, out: &mut [DVector<Self::F>])
-    where
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn convex_gradients<S1, S2>(
+        &self,
+        _param: &Vector<Self::F, Dyn, S1>,
+        out: &mut [Vector<Self::F, Dyn, S2>],
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn> + Debug,
     {
         let n = self.xs.len();
         let m = self.ys.len();
@@ -166,9 +182,13 @@ impl ConvexConstraints for LinearDiscrimination {
         }
     }
 
-    fn convex_hessians<S>(&self, _param: &Vector<Self::F, Dyn, S>, out: &mut [DMatrix<Self::F>])
-    where
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn convex_hessians<S1, S2>(
+        &self,
+        _param: &Vector<Self::F, Dyn, S1>,
+        _out: &mut [Matrix<Self::F, Dyn, Dyn, S2>],
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
         // We assume the matrices are already initialized with zeros.
         // out.iter_mut().for_each(|x| x.fill(0.0));
@@ -176,33 +196,27 @@ impl ConvexConstraints for LinearDiscrimination {
 }
 
 impl LinearConstraints for LinearDiscrimination {
-    fn mat_a(&self) -> DMatrix<Self::F>
-    where
-        Self::F: std::fmt::Debug + nalgebra::Scalar,
-    {
+    fn mat_a(&self) -> DMatrix<Self::F> {
         DMatrix::zeros(0, self.dims())
     }
 
-    fn vec_b(&self) -> DVector<Self::F>
-    where
-        Self::F: std::fmt::Debug + nalgebra::Scalar,
-    {
+    fn vec_b(&self) -> DVector<Self::F> {
         DVector::zeros(0)
     }
 }
 
 fn main() {
-    let nx = 15;
-    let ny = 30;
+    let nx = 50;
+    let ny = 50;
 
     let mut x = Vec::with_capacity(nx);
     let mut y = Vec::with_capacity(ny);
 
     for _ in 0..nx {
-        x.push(Vector2::new(fastrand::f32(), fastrand::f32()));
+        x.push(Vector2::new(fastrand::f32() + 0.5, fastrand::f32()));
     }
     for _ in 0..ny {
-        y.push(Vector2::new(fastrand::f32(), fastrand::f32()));
+        y.push(Vector2::new(fastrand::f32() - 0.5, fastrand::f32()));
     }
 
     let mut x0 = DVector::zeros(3 + x.len() + y.len());
@@ -224,11 +238,15 @@ fn main() {
 
     println!("{constraints:?}");
 
-    let count = 1000;
+    let count = 100;
+
+    let lsp = LineSearchParams::new(0.3, 0.8);
+    let center = NewtonParams::new(1e-2, lsp);
+    let params = BarrierParams::new(10.0, 3.0, 1e-3, center);
 
     for _ in 0..count {
         // let sol = newtons_method(&disc, &x0, 1e-20, 0.3, 0.8);
-        let _sol = barrier_method(&mut disc, &x0, 0.1, 5.0, 1e-5, 1e-3, 0.3, 0.8);
+        let _sol = barrier_method(&mut disc, &x0, &params);
     }
 
     let dur = start.elapsed() / count;

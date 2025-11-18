@@ -1,9 +1,9 @@
 use crate::{
-    ConvexConstraints, CostFunction, Gradient, Hessian, LinearConstraints, PrimalDual,
-    alg::line_search::backtrack_line_search,
+    ConvexConstraints, Hessian, LinearConstraints, PrimalDual,
+    alg::line_search::{LineSearchParams, backtrack_line_search},
 };
 use nalgebra::{ComplexField, DMatrix, DVector, Dyn, OVector, Scalar, Storage, Vector, stack};
-use num_traits::{FromPrimitive, NumAssign, Zero};
+use num_traits::{FromPrimitive, Num, NumAssign, Zero};
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -12,13 +12,29 @@ pub struct NewtonsMethodSolution<F: Scalar> {
     pub cost: F,
 }
 
+pub struct NewtonParams<F> {
+    tolerance: F,
+    ls_params: LineSearchParams<F>,
+}
+
+impl<F> NewtonParams<F> {
+    pub fn new(tolerance: F, ls_params: LineSearchParams<F>) -> Self
+    where
+        F: Num + PartialOrd,
+    {
+        assert!(F::zero() < tolerance);
+        Self {
+            tolerance,
+            ls_params,
+        }
+    }
+}
+
 #[must_use]
 pub fn newtons_method<P, S>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
-    tolerance: P::F,
-    alpha: P::F,
-    beta: P::F,
+    params: &NewtonParams<P::F>,
 ) -> NewtonsMethodSolution<P::F>
 where
     P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual,
@@ -32,7 +48,7 @@ where
         + Zero,
     S: Storage<P::F, Dyn> + Debug,
 {
-    let tol2 = tolerance * tolerance;
+    let tol2 = params.tolerance * params.tolerance;
 
     let dims = problem.dims();
 
@@ -48,6 +64,8 @@ where
     let mut hessian = DMatrix::zeros(dims, dims);
     let mut gradient = DVector::zeros(dims);
 
+    let mut residual = DVector::zeros(x.nrows() + v.nrows());
+
     loop {
         problem.hessian(&x, &mut hessian);
         problem.gradient(&x, &mut gradient);
@@ -62,12 +80,18 @@ where
         let new_v = dxv.rows_range(dims..);
         let dv = new_v - &v;
 
-        let t = backtrack_line_search(problem, &stack![x; v], &stack![dx; dv], alpha, beta);
+        let t = backtrack_line_search(
+            problem,
+            &mut residual,
+            &stack![x; v],
+            &stack![dx; dv],
+            &params.ls_params,
+        );
 
-        x += &dx * t;
-        v += &dv * t;
+        x += dx * t;
+        v += dv * t;
 
-        let residual = problem.residual(&stack![x; v]).norm_squared();
+        let residual = residual.norm_squared();
 
         assert!(residual.is_finite());
 

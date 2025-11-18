@@ -1,11 +1,13 @@
 use std::{fmt::Debug, iter::Sum};
 
-use nalgebra::{ComplexField, DMatrix, DVector, Dyn, RawStorage, Scalar, Storage, Vector};
+use nalgebra::{
+    ComplexField, DMatrix, DVector, Dyn, Matrix, RawStorage, Scalar, Storage, StorageMut, Vector,
+};
 use num_traits::{Float, FromPrimitive, Inv, Num, NumAssign, One, Zero, real::Real};
 
 use crate::{
     ConvexConstraints, CostFunction, Gradient, Hessian, LinearConstraints, PrimalDual,
-    alg::newton::{NewtonsMethodSolution, newtons_method},
+    alg::newton::{NewtonParams, NewtonsMethodSolution, newtons_method},
 };
 
 pub struct BarrierProblem<'a, P: CostFunction> {
@@ -16,7 +18,7 @@ pub struct BarrierProblem<'a, P: CostFunction> {
     const_hess_buffer: Vec<DMatrix<P::F>>,
 }
 
-impl<'a, P> CostFunction for BarrierProblem<'a, P>
+impl<P> CostFunction for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
     P::F: Real + Inv<Output = P::F> + Sum,
@@ -48,15 +50,18 @@ where
     }
 }
 
-impl<'a, P> Gradient for BarrierProblem<'a, P>
+impl<P> Gradient for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Real + Inv<Output = P::F> + Sum + NumAssign,
+    P::F: Scalar + Real + Inv<Output = P::F> + Sum + NumAssign,
 {
-    fn gradient<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut DVector<Self::F>)
-    where
-        Self::F: Debug + Scalar + Num,
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn gradient<S1, S2>(
+        &mut self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut Vector<Self::F, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn> + Debug,
     {
         self.problem.gradient(param, out);
 
@@ -80,15 +85,18 @@ where
     }
 }
 
-impl<'a, P> Hessian for BarrierProblem<'a, P>
+impl<P> Hessian for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Real + Inv<Output = P::F> + Sum + NumAssign,
+    P::F: Scalar + Real + Inv<Output = P::F> + Sum + NumAssign,
 {
-    fn hessian<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut DMatrix<Self::F>)
-    where
-        Self::F: Debug + Scalar,
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn hessian<S1, S2>(
+        &mut self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
         self.problem.hessian(param, out);
 
@@ -121,30 +129,25 @@ where
     }
 }
 
-impl<'a, P> LinearConstraints for BarrierProblem<'a, P>
+impl<P> LinearConstraints for BarrierProblem<'_, P>
 where
     P: LinearConstraints + ConvexConstraints,
-    P::F: Real + Inv<Output = P::F> + Sum,
+    P::F: Scalar + Real + Inv<Output = P::F> + Sum,
 {
-    fn mat_a(&self) -> nalgebra::DMatrix<Self::F>
-    where
-        Self::F: Debug + Scalar,
-    {
+    fn mat_a(&self) -> nalgebra::DMatrix<Self::F> {
         self.problem.mat_a()
     }
 
-    fn vec_b(&self) -> nalgebra::DVector<Self::F>
-    where
-        Self::F: Debug + Scalar,
-    {
+    fn vec_b(&self) -> nalgebra::DVector<Self::F> {
         self.problem.vec_b()
     }
 }
 
-impl<'a, P> ConvexConstraints for BarrierProblem<'a, P>
+#[allow(clippy::semicolon_if_nothing_returned)]
+impl<P> ConvexConstraints for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Inv<Output = P::F> + Sum + Scalar + Float + NumAssign,
+    P::F: Scalar + Inv<Output = P::F> + Sum + Float + NumAssign,
 {
     #[inline]
     fn number_of_constraints(&self) -> usize {
@@ -158,33 +161,61 @@ where
         self.problem.convex_constraints(param, out)
     }
 
-    fn convex_gradients<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [DVector<Self::F>])
-    where
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn convex_gradients<S1, S2>(
+        &self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut [Vector<Self::F, Dyn, S2>],
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn> + Debug,
     {
         self.problem.convex_gradients(param, out)
     }
 
-    fn convex_hessians<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [DMatrix<Self::F>])
-    where
-        S: RawStorage<Self::F, Dyn> + Debug,
+    fn convex_hessians<S1, S2>(
+        &self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut [Matrix<Self::F, Dyn, Dyn, S2>],
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
         self.problem.convex_hessians(param, out)
+    }
+}
+
+pub struct BarrierParams<F> {
+    t0: F,
+    mu: F,
+    tolerance: F,
+    center_params: NewtonParams<F>,
+}
+
+impl<F> BarrierParams<F> {
+    pub fn new(t0: F, mu: F, tolerance: F, center_params: NewtonParams<F>) -> Self
+    where
+        F: Num + PartialOrd,
+    {
+        assert!(F::zero() < t0);
+        assert!(F::one() < mu);
+        assert!(F::zero() < tolerance);
+
+        Self {
+            t0,
+            mu,
+            tolerance,
+            center_params,
+        }
     }
 }
 
 pub fn barrier_method<P, S>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
-    t0: P::F,
-    mu: P::F,
-    tolerance: P::F,
-    centering_tolerance: P::F,
-    alpha: P::F,
-    beta: P::F,
+    params: &BarrierParams<P::F>,
 ) -> NewtonsMethodSolution<P::F>
 where
-    P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual,
+    P: Hessian + ConvexConstraints + PrimalDual,
     P::F: Debug
         + Float
         + Scalar
@@ -199,8 +230,6 @@ where
         + FromPrimitive,
     S: Storage<P::F, Dyn> + Debug,
 {
-    assert!(mu > P::F::one());
-
     let nconstr = problem.number_of_constraints();
     let mut constraints = vec![P::F::zero(); nconstr];
     problem.convex_constraints(x0, &mut constraints);
@@ -210,7 +239,7 @@ where
 
     let mut barrier = BarrierProblem {
         problem,
-        accuracy: t0,
+        accuracy: params.t0,
         const_buffer: vec![P::F::zero(); nconstr],
         const_grad_buffer: vec![DVector::zeros(nvar); nconstr],
         const_hess_buffer: vec![DMatrix::zeros(nvar, nvar); nconstr],
@@ -221,18 +250,18 @@ where
     let mut x = x0.clone_owned();
 
     loop {
-        let new_x = newtons_method(&mut barrier, &x, centering_tolerance, alpha, beta).arg;
+        let new_x = newtons_method(&mut barrier, &x, &params.center_params).arg;
 
         // println!("=====  Step  =====");
         // println!("Cost = {}", problem.cost(&x));
 
         x = new_x;
 
-        if nconstr / barrier.accuracy < tolerance {
+        if nconstr / barrier.accuracy < params.tolerance {
             break;
         }
 
-        barrier.accuracy *= mu;
+        barrier.accuracy *= params.mu;
     }
 
     let mut bcost = P::F::zero();
