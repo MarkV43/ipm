@@ -246,7 +246,7 @@ fn main() {
 
     for _ in 0..count {
         // let sol = newtons_method(&disc, &x0, 1e-20, 0.3, 0.8);
-        let _sol = barrier_method(&mut disc, &x0, &params);
+        let _sol = barrier_method(&mut disc, &x0, 10.0, 3.0);
     }
 
     let dur = start.elapsed() / count;

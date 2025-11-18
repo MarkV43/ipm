@@ -34,7 +34,9 @@ impl<F> NewtonParams<F> {
 pub fn newtons_method<P, S>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
-    params: &NewtonParams<P::F>,
+    tolerance: P::F,
+    alpha: P::F,
+    beta: P::F,
 ) -> NewtonsMethodSolution<P::F>
 where
     P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual,
@@ -48,7 +50,7 @@ where
         + Zero,
     S: Storage<P::F, Dyn> + Debug,
 {
-    let tol2 = params.tolerance * params.tolerance;
+    let tol2 = tolerance * tolerance;
 
     let dims = problem.dims();
 
@@ -85,7 +87,8 @@ where
             &mut residual,
             &stack![x; v],
             &stack![dx; dv],
-            &params.ls_params,
+            alpha,
+            beta,
         );
 
         x += dx * t;

@@ -212,7 +212,12 @@ impl<F> BarrierParams<F> {
 pub fn barrier_method<P, S>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
-    params: &BarrierParams<P::F>,
+    t0: P::F,
+    mu: P::F,
+    tolerance: P::F,
+    centering_tol: P::F,
+    alpha: P::F,
+    beta: P::F,
 ) -> NewtonsMethodSolution<P::F>
 where
     P: Hessian + ConvexConstraints + PrimalDual,
@@ -239,7 +244,7 @@ where
 
     let mut barrier = BarrierProblem {
         problem,
-        accuracy: params.t0,
+        accuracy: t0,
         const_buffer: vec![P::F::zero(); nconstr],
         const_grad_buffer: vec![DVector::zeros(nvar); nconstr],
         const_hess_buffer: vec![DMatrix::zeros(nvar, nvar); nconstr],
@@ -250,18 +255,18 @@ where
     let mut x = x0.clone_owned();
 
     loop {
-        let new_x = newtons_method(&mut barrier, &x, &params.center_params).arg;
+        let new_x = newtons_method(&mut barrier, &x, centering_tol, alpha, beta).arg;
 
         // println!("=====  Step  =====");
         // println!("Cost = {}", problem.cost(&x));
 
         x = new_x;
 
-        if nconstr / barrier.accuracy < params.tolerance {
+        if nconstr / barrier.accuracy < tolerance {
             break;
         }
 
-        barrier.accuracy *= params.mu;
+        barrier.accuracy *= mu;
     }
 
     let mut bcost = P::F::zero();

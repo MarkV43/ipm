@@ -25,7 +25,8 @@ pub fn backtrack_line_search<P, S1, S2, S3>(
     residual: &mut Vector<P::F, Dyn, S1>,
     xv: &Vector<P::F, Dyn, S2>,
     dir_xv: &Vector<P::F, Dyn, S3>,
-    params: &LineSearchParams<P::F>,
+    alpha: P::F,
+    beta: P::F,
 ) -> P::F
 where
     P: PrimalDual + ConvexConstraints,
@@ -52,7 +53,7 @@ where
         problem.convex_constraints(&x_candidate, &mut constraints);
         let infeasible = constraints.iter().any(|&c| c >= P::F::zero());
 
-        let bound = P::F::one() - t * params.alpha;
+        let bound = P::F::one() - t * alpha;
 
         problem.residual(&candidate, residual);
         let residual_too_large = residual.norm_squared() > bound * bound * residual_at_xv + eps;
@@ -61,6 +62,6 @@ where
             return t;
         }
 
-        t *= params.beta;
+        t *= beta;
     }
 }
