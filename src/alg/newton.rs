@@ -15,10 +15,12 @@ pub struct NewtonsMethodSolution<F: Scalar> {
 pub struct NewtonParams<F> {
     tolerance: F,
     ls_params: LineSearchParams<F>,
+    min_its: usize,
+    max_its: usize,
 }
 
 impl<F> NewtonParams<F> {
-    pub fn new(tolerance: F, ls_params: LineSearchParams<F>) -> Self
+    pub fn new(tolerance: F, ls_params: LineSearchParams<F>, min_its: usize, max_its: usize) -> Self
     where
         F: Num + PartialOrd,
     {
@@ -26,6 +28,8 @@ impl<F> NewtonParams<F> {
         Self {
             tolerance,
             ls_params,
+            min_its,
+            max_its,
         }
     }
 }
@@ -95,7 +99,10 @@ where
 
         assert!(residual.is_finite());
 
-        if residual <= tol2 || its >= 10 && dxv.norm_squared() < tol2 || its > 100 {
+        if residual <= tol2
+            || its >= params.min_its && dxv.norm_squared() < tol2
+            || its > params.max_its
+        {
             break;
         }
 

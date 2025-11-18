@@ -223,7 +223,7 @@ fn main() {
     x0.rows_mut(0, 2).fill(1.0);
     x0.rows_range_mut(3..).fill(4.0);
 
-    println!("{:?}", x0.as_slice());
+    // println!("{:?}", x0.as_slice());
 
     let start = Instant::now();
 
@@ -236,22 +236,19 @@ fn main() {
     let mut constraints = vec![0.0; disc.number_of_constraints()];
     disc.convex_constraints(&x0, &mut constraints);
 
-    println!("{constraints:?}");
+    // println!("{constraints:?}");
 
-    let count = 100;
+    let count = 1;
 
-    let lsp = LineSearchParams::new(0.3, 0.8);
-    let center = NewtonParams::new(1e-2, lsp);
-    let params = BarrierParams::new(10.0, 3.0, 1e-3, center);
+    let lsp = LineSearchParams::new(0.3, 0.6);
+    let center = NewtonParams::new(1e-1, lsp, 8, 20);
+    let params = BarrierParams::new(10.0, 30.0, 1e-3, center);
 
     for _ in 0..count {
-        // let sol = newtons_method(&disc, &x0, 1e-20, 0.3, 0.8);
         let _sol = barrier_method(&mut disc, &x0, &params);
     }
 
     let dur = start.elapsed() / count;
 
     println!("Elapsed: {dur:?}");
-
-    // println!("{sol:#?}");
 }
