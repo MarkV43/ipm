@@ -7,3 +7,9 @@ edition = "2024"
 fastrand = "2.3.0"
 nalgebra = "0.34.1"
 num-traits = "0.2.19"
+
+[profile.release]
+debug = true
+opt-level = 3
+codegen-units = 1
+lto = "fat"

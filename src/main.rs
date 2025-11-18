@@ -1,11 +1,8 @@
 use std::{f32, fmt::Debug, time::Instant};
 
-use ipm::{
-    alg::barrier::{BarrierProblem, barrier_method},
-    *,
-};
+use ipm::{alg::barrier::barrier_method, *};
 use nalgebra::{
-    Const, DMatrix, DVector, Dyn, OMatrix, OVector, RawStorage, Scalar, Vector, Vector2, dvector,
+    Const, DMatrix, DVector, Dyn, OMatrix, OVector, RawStorage, Scalar, Vector, Vector2,
 };
 use num_traits::{Num, One};
 
@@ -157,14 +154,14 @@ impl ConvexConstraints for LinearDiscrimination {
         // -u_i
         for i in 0..n {
             let g = &mut out[n + m + i];
-            g.fill(0.0);
+            // g.fill(0.0);
             g[3 + i] = -Self::F::one();
         }
 
         // -v_i
         for i in 0..m {
             let g = &mut out[n + m + n + i];
-            g.fill(0.0);
+            // g.fill(0.0);
             g[3 + n + i] = -Self::F::one();
         }
     }
@@ -173,7 +170,8 @@ impl ConvexConstraints for LinearDiscrimination {
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        out.iter_mut().for_each(|x| x.fill(0.0));
+        // We assume the matrices are already initialized with zeros.
+        // out.iter_mut().for_each(|x| x.fill(0.0));
     }
 }
 
@@ -194,30 +192,24 @@ impl LinearConstraints for LinearDiscrimination {
 }
 
 fn main() {
-    let x = vec![
-        Vector2::new(0.0, 0.0),
-        Vector2::new(1.0, 0.0),
-        Vector2::new(0.5, 0.5),
-        Vector2::new(0.0, 0.5),
-        Vector2::new(0.1, 0.5),
-        Vector2::new(0.2, 0.5),
-        Vector2::new(0.3, 0.5),
-        Vector2::new(0.4, 0.5),
-    ];
-    let y = vec![
-        Vector2::new(0.0, 1.0),
-        Vector2::new(1.0, 1.0),
-        Vector2::new(0.1, 1.5),
-        Vector2::new(0.2, 1.5),
-        Vector2::new(0.3, 1.5),
-        Vector2::new(0.4, 1.5),
-    ];
+    let nx = 15;
+    let ny = 30;
+
+    let mut x = Vec::with_capacity(nx);
+    let mut y = Vec::with_capacity(ny);
+
+    for _ in 0..nx {
+        x.push(Vector2::new(fastrand::f32(), fastrand::f32()));
+    }
+    for _ in 0..ny {
+        y.push(Vector2::new(fastrand::f32(), fastrand::f32()));
+    }
 
     let mut x0 = DVector::zeros(3 + x.len() + y.len());
     x0.rows_mut(0, 2).fill(1.0);
     x0.rows_range_mut(3..).fill(4.0);
 
-    println!("{x0}");
+    println!("{:?}", x0.as_slice());
 
     let start = Instant::now();
 
@@ -232,10 +224,14 @@ fn main() {
 
     println!("{constraints:?}");
 
-    // let sol = newtons_method(&disc, &x0, 1e-20, 0.3, 0.8);
-    let sol = barrier_method(&mut disc, &x0, 0.1, 5.0, 1e-5, 1e-3, 0.3, 0.8);
+    let count = 1000;
 
-    let dur = start.elapsed();
+    for _ in 0..count {
+        // let sol = newtons_method(&disc, &x0, 1e-20, 0.3, 0.8);
+        let _sol = barrier_method(&mut disc, &x0, 0.1, 5.0, 1e-5, 1e-3, 0.3, 0.8);
+    }
+
+    let dur = start.elapsed() / count;
 
     println!("Elapsed: {dur:?}");
 

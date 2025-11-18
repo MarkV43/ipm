@@ -245,11 +245,11 @@ where
 
     problem.convex_constraints(&sol.arg, &mut constraints);
 
-    println!("\n");
-    println!("x = {:?}", sol.arg.as_slice());
-    println!("cost = {}", sol.cost);
-    println!("bcost = {}", bcost);
-    println!("cnvx = {:?}", constraints.as_slice());
+    // println!("\n");
+    // println!("x = {:?}", sol.arg.as_slice());
+    // println!("cost = {}", sol.cost);
+    // println!("bcost = {}", bcost);
+    // println!("cnvx = {:?}", constraints.as_slice());
 
     sol
 }

@@ -55,32 +55,22 @@ where
         let new_a = stack![hessian, &mat_at; &mat_a, 0];
         let new_b = -stack![gradient; &mat_a * &x - &vec_b];
 
-        // println!("{x}");
-
-        let Some(dxv) = new_a.lu().solve(&new_b) else {
-            break;
-        };
+        let dxv = new_a.lu().solve(&new_b).expect("Failed to invert matrix");
         // let dxv = new_a.try_inverse().unwrap() * new_b;
         let dx = dxv.rows(0, dims);
 
         let new_v = dxv.rows_range(dims..);
         let dv = new_v - &v;
 
-        let mut t = backtrack_line_search(problem, &stack![x; v], &stack![dx; dv], alpha, beta);
+        let t = backtrack_line_search(problem, &stack![x; v], &stack![dx; dv], alpha, beta);
 
-        let mut new_x = &x + &dx * t;
-        let mut new_v = &v + &dv * t;
+        x += &dx * t;
+        v += &dv * t;
 
-        let mut residual = problem.residual(&stack![new_x; new_v]).norm_squared();
+        let residual = problem.residual(&stack![x; v]).norm_squared();
 
         assert!(residual.is_finite());
 
-        x = new_x;
-        v = new_v;
-
-        // println!("Residual: {residual} <= {tol2}");
-
-        // let err = &mat_a * &x - &vec_b;
         if residual <= tol2 || its >= 10 && dxv.norm_squared() < tol2 || its > 100 {
             break;
         }
