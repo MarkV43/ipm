@@ -4,6 +4,7 @@ use std::fmt::Debug;
 
 use crate::{ConvexConstraints, PrimalDual};
 
+#[derive(Clone, Debug)]
 pub struct LineSearchParams<F> {
     pub(crate) alpha: F,
     pub(crate) beta: F,
@@ -40,7 +41,7 @@ where
     problem.residual(xv, residual);
     let residual_at_xv = residual.norm_squared();
 
-    let nconstr = problem.number_of_constraints();
+    let nconstr = problem.num_convex_constraints();
     let mut constraints = vec![P::F::zero(); nconstr];
 
     let eps = P::F::from_f64(1e-9).unwrap();

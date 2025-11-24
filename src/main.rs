@@ -1,143 +1,104 @@
-use std::{f32, fmt::Debug, time::Instant};
+use std::{fmt::Debug, time::Instant};
 
 use ipm::{
+    ConvexConstraints, CostFunction, Gradient, Hessian, LinearConstraints,
     alg::{
-        barrier::{BarrierParams, barrier_method},
+        barrier::{BarrierParams, barrier_method_infeasible},
         line_search::LineSearchParams,
         newton::NewtonParams,
     },
-    *,
 };
-use nalgebra::{
-    Const, DMatrix, DVector, Dyn, Matrix, OMatrix, OVector, RawStorage, StorageMut, Vector, Vector2,
-};
-use num_traits::One;
+use nalgebra::{DVector, Dyn, Matrix, RawStorage, StorageMut, Vector};
 
-struct LinearDiscrimination {
-    xs: Vec<Vector2<f32>>,
-    ys: Vec<Vector2<f32>>,
-    gamma: f32,
-}
+struct Question6;
 
-impl CostFunction for LinearDiscrimination {
-    type F = f32;
+impl CostFunction for Question6 {
+    type F = f64;
 
     fn cost<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut Self::F)
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let a = param.rows(0, 2);
-        // let b = param.rows(2, 1);
-        let u = param.rows(3, self.xs.len());
-        let v = param.rows(3 + self.xs.len(), self.ys.len());
-
-        *out = a.norm() + self.gamma * (u.sum() + v.sum())
+        *out = -3.0 * param[0] - 2.0 * param[1];
     }
 
+    #[inline(always)]
     fn dims(&self) -> usize {
-        self.xs.len() + self.ys.len() + 3
+        2
     }
 }
 
-impl Gradient for LinearDiscrimination {
+impl Gradient for Question6 {
     fn gradient<S1, S2>(
         &mut self,
-        param: &Vector<Self::F, Dyn, S1>,
+        _param: &Vector<Self::F, Dyn, S1>,
         out: &mut Vector<Self::F, Dyn, S2>,
     ) where
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn> + Debug,
     {
-        out.fill(0.0);
-
-        // layout: a (2) | b (1) | u (nx) | v (ny)
-        let a = param.rows(0, 2).into_owned();
-        let nx = self.xs.len();
-        let ny = self.ys.len();
-
-        // gradient wrt a: a / ||a||  (choose 0 when ||a|| == 0)
-        let norm_a = a.norm();
-        if norm_a != 0.0 {
-            let grad_a = &a / norm_a;
-            out.rows_mut(0, 2).copy_from(&grad_a);
-        } // else leave zeros (subgradient choice)
-
-        // b has no contribution -> gradient 0 (already zero)
-
-        // u and v: gamma * ones
-        let start_u = 3;
-        let start_v = 3 + nx;
-        if nx > 0 {
-            let ones_u = OVector::<Self::F, Dyn>::from_element(nx, self.gamma);
-            out.rows_mut(start_u, nx).copy_from(&ones_u);
-        }
-        if ny > 0 {
-            let ones_v = OVector::<Self::F, Dyn>::from_element(ny, self.gamma);
-            out.rows_mut(start_v, ny).copy_from(&ones_v);
-        }
+        out[0] = -3.0;
+        out[1] = -2.0;
     }
 }
 
-impl Hessian for LinearDiscrimination {
+impl Hessian for Question6 {
     fn hessian<S1, S2>(
         &mut self,
         _param: &Vector<Self::F, Dyn, S1>,
-        out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
+        _out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
     ) where
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
-        out.fill(0.0);
-
-        // Only a-block (top-left 2x2) is nonzero:
-        // H_a = (I / ||a||) - (a a^T / ||a||^3)
-        let a = _param.rows(0, 2).into_owned();
-        let norm_a = a.norm();
-
-        if norm_a != 0.0 {
-            // build 2x2 identity and aa^T
-            let i2 = OMatrix::<Self::F, Dyn, Dyn>::identity(2, 2);
-            let aa_t = &a * a.transpose(); // 2x2
-
-            let ha = (&i2) / norm_a - (&aa_t) / (norm_a * norm_a * norm_a);
-
-            // copy ha into top-left block of h
-            let mut block = out.view_mut((0, 0), (2, 2));
-            block.copy_from(&ha);
-        }
-        // all other second derivatives are zero because cost is linear in b,u,v and uses only ||a|| for quadratic part.
+        // do nothing, `out` is already filled with zeros
     }
 }
 
-impl ConvexConstraints for LinearDiscrimination {
-    fn number_of_constraints(&self) -> usize {
-        2 * (self.xs.len() + self.ys.len())
+impl LinearConstraints for Question6 {
+    #[inline(always)]
+    fn num_linear_constraints(&self) -> usize {
+        0
+    }
+
+    fn mat_a<S>(&self, _out: &mut Matrix<Self::F, Dyn, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn, Dyn>,
+    {
+        // Keep zeros
+    }
+
+    fn vec_b<S>(&self, _out: &mut Vector<Self::F, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn>,
+    {
+        // Keep zeros
+    }
+}
+
+impl ConvexConstraints for Question6 {
+    #[inline(always)]
+    fn num_convex_constraints(&self) -> usize {
+        10
     }
 
     fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        let n = self.xs.len();
-        let m = self.ys.len();
+        let x1 = param[0];
+        let x2 = param[1];
 
-        let a = param.rows_generic(0, Const::<2>);
-        let b = param.rows_generic(2, Const::<1>);
-        let u = param.rows(3, n);
-        let v = param.rows(3 + n, m);
-
-        for i in 0..n {
-            out[i] = b[0] - a.dot(&self.xs[i]) - u[i] + Self::F::one();
-        }
-        for i in 0..m {
-            out[n + i] = a.dot(&self.ys[i]) - b[0] - v[i] + Self::F::one();
-        }
-        for i in 0..n {
-            out[n + m + i] = -u[i];
-        }
-        for i in 0..m {
-            out[n + m + n + i] = -v[i];
-        }
+        out[0] = -1.0 + x1 - 2.0 * x2;
+        out[1] = -2.0 + x1 - x2;
+        out[2] = -6.0 + 2.0 * x1 - x2;
+        out[3] = -5.0 + x1;
+        out[4] = -16.0 + 2.0 * x1 + x2;
+        out[5] = -12.0 + x1 + x2;
+        out[6] = -21.0 + x1 + 2.0 * x2;
+        out[7] = -10.0 + x2;
+        out[8] = -x1;
+        out[9] = -x2;
     }
 
     fn convex_gradients<S1, S2>(
@@ -148,38 +109,16 @@ impl ConvexConstraints for LinearDiscrimination {
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn> + Debug,
     {
-        let n = self.xs.len();
-        let m = self.ys.len();
-
-        // b[0] - a.dot(x_i) - u_i + 1
-        for i in 0..n {
-            let g = &mut out[i];
-            g.rows_generic_mut(0, Const::<2>).copy_from(&-self.xs[i]);
-            g[2] = Self::F::one();
-            g[3 + i] = -Self::F::one();
-        }
-
-        // a.dot(y_i) - b[0] - v_i + 1
-        for i in 0..m {
-            let g = &mut out[n + i];
-            g.rows_generic_mut(0, Const::<2>).copy_from(&self.ys[i]);
-            g[2] = -Self::F::one();
-            g[3 + n + i] = -Self::F::one();
-        }
-
-        // -u_i
-        for i in 0..n {
-            let g = &mut out[n + m + i];
-            // g.fill(0.0);
-            g[3 + i] = -Self::F::one();
-        }
-
-        // -v_i
-        for i in 0..m {
-            let g = &mut out[n + m + n + i];
-            // g.fill(0.0);
-            g[3 + n + i] = -Self::F::one();
-        }
+        out[0].rows_mut(0, 2).copy_from_slice(&[1.0, -2.0]);
+        out[1].rows_mut(0, 2).copy_from_slice(&[1.0, -1.0]);
+        out[2].rows_mut(0, 2).copy_from_slice(&[2.0, -1.0]);
+        out[3].rows_mut(0, 2).copy_from_slice(&[1.0, 0.0]);
+        out[4].rows_mut(0, 2).copy_from_slice(&[2.0, 1.0]);
+        out[5].rows_mut(0, 2).copy_from_slice(&[1.0, 1.0]);
+        out[6].rows_mut(0, 2).copy_from_slice(&[1.0, 2.0]);
+        out[7].rows_mut(0, 2).copy_from_slice(&[0.0, 1.0]);
+        out[8].rows_mut(0, 2).copy_from_slice(&[-1.0, 0.0]);
+        out[9].rows_mut(0, 2).copy_from_slice(&[0.0, -1.0]);
     }
 
     fn convex_hessians<S1, S2>(
@@ -190,65 +129,26 @@ impl ConvexConstraints for LinearDiscrimination {
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
-        // We assume the matrices are already initialized with zeros.
-        // out.iter_mut().for_each(|x| x.fill(0.0));
-    }
-}
-
-impl LinearConstraints for LinearDiscrimination {
-    fn mat_a(&self) -> DMatrix<Self::F> {
-        DMatrix::zeros(0, self.dims())
-    }
-
-    fn vec_b(&self) -> DVector<Self::F> {
-        DVector::zeros(0)
+        // Do nothing, just zeros
     }
 }
 
 fn main() {
-    let nx = 50;
-    let ny = 50;
+    let mut q6 = Question6;
 
-    let mut x = Vec::with_capacity(nx);
-    let mut y = Vec::with_capacity(ny);
+    let lparams = LineSearchParams::new(0.3, 0.7);
+    let nparams = NewtonParams::new(1e-5, lparams, 10, 100);
+    let bparams = BarrierParams::new(0.1, 10.0, 1e-3, nparams);
 
-    for _ in 0..nx {
-        x.push(Vector2::new(fastrand::f32() + 0.5, fastrand::f32()));
-    }
-    for _ in 0..ny {
-        y.push(Vector2::new(fastrand::f32() - 0.5, fastrand::f32()));
-    }
+    let x0 = DVector::from_vec(vec![1.0, 1.0]);
 
-    let mut x0 = DVector::zeros(3 + x.len() + y.len());
-    x0.rows_mut(0, 2).fill(1.0);
-    x0.rows_range_mut(3..).fill(4.0);
+    let t0 = Instant::now();
 
-    // println!("{:?}", x0.as_slice());
+    let sol = barrier_method_infeasible(&mut q6, &x0, &bparams);
 
-    let start = Instant::now();
+    let dur = t0.elapsed();
 
-    let mut disc = LinearDiscrimination {
-        xs: x,
-        ys: y,
-        gamma: 1.0,
-    };
-
-    let mut constraints = vec![0.0; disc.number_of_constraints()];
-    disc.convex_constraints(&x0, &mut constraints);
-
-    // println!("{constraints:?}");
-
-    let count = 1;
-
-    let lsp = LineSearchParams::new(0.3, 0.6);
-    let center = NewtonParams::new(1e-1, lsp, 8, 20);
-    let params = BarrierParams::new(10.0, 30.0, 1e-3, center);
-
-    for _ in 0..count {
-        let _sol = barrier_method(&mut disc, &x0, &params);
-    }
-
-    let dur = start.elapsed() / count;
-
+    println!("Solution: {}", sol.arg);
+    println!("Cost: {}", sol.cost);
     println!("Elapsed: {dur:?}");
 }

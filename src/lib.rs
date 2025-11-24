@@ -54,13 +54,18 @@ pub trait LinearConstraints: CostFunction
 where
     Self::F: Scalar,
 {
-    fn mat_a(&self) -> DMatrix<Self::F>;
-    fn vec_b(&self) -> DVector<Self::F>;
+    fn num_linear_constraints(&self) -> usize;
+    fn mat_a<S>(&self, out: &mut Matrix<Self::F, Dyn, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn, Dyn>;
+    fn vec_b<S>(&self, out: &mut Vector<Self::F, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn>;
 }
 
 /// Constrains the problem to `f_i(x) \leq 0, i=1,\dots,m`
 pub trait ConvexConstraints: Hessian {
-    fn number_of_constraints(&self) -> usize;
+    fn num_convex_constraints(&self) -> usize;
 
     fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
     where
@@ -110,8 +115,13 @@ where
         S2: StorageMut<Self::F, Dyn> + Debug,
     {
         let dims = self.dims();
-        let mat_a = self.mat_a();
-        let vec_b = self.vec_b();
+        let nconstr = self.num_linear_constraints();
+
+        let mut mat_a = DMatrix::zeros(nconstr, dims);
+        let mut vec_b = DVector::zeros(nconstr);
+
+        self.mat_a(&mut mat_a);
+        self.vec_b(&mut vec_b);
 
         let x = xv.rows(0, dims);
         let v = xv.rows_range(dims..);

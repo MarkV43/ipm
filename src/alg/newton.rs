@@ -12,6 +12,7 @@ pub struct NewtonsMethodSolution<F: Scalar> {
     pub cost: F,
 }
 
+#[derive(Clone, Debug)]
 pub struct NewtonParams<F> {
     tolerance: F,
     ls_params: LineSearchParams<F>,
@@ -55,10 +56,15 @@ where
     let tol2 = params.tolerance * params.tolerance;
 
     let dims = problem.dims();
+    let nconstr = problem.num_linear_constraints();
 
-    let mat_a = problem.mat_a();
+    let mut mat_a = DMatrix::zeros(nconstr, dims);
+    let mut vec_b = DVector::zeros(nconstr);
+
+    problem.mat_a(&mut mat_a);
+    problem.vec_b(&mut vec_b);
+
     let mat_at = mat_a.transpose();
-    let vec_b = problem.vec_b();
 
     let mut x = x0.clone_owned();
     let mut v = DVector::zeros(mat_a.nrows());
@@ -70,14 +76,20 @@ where
 
     let mut residual = DVector::zeros(x.nrows() + v.nrows());
 
+    // let mut dxv;
+
     loop {
         problem.hessian(&x, &mut hessian);
         problem.gradient(&x, &mut gradient);
 
         let new_a = stack![hessian, &mat_at; &mat_a, 0];
-        let new_b = -stack![gradient; &mat_a * &x - &vec_b];
+        let new_b = -stack![gradient; &mat_a * &x - &vec_b]; // new_b
 
-        let dxv = new_a.lu().solve(&new_b).expect("Failed to invert matrix");
+        let dxv = new_a
+            .cholesky()
+            .expect("Failed to compute Cholesky decomposition")
+            .solve(&new_b);
+
         // let dxv = new_a.try_inverse().unwrap() * new_b;
         let dx = dxv.rows(0, dims);
 

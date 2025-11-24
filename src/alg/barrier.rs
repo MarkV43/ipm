@@ -10,7 +10,7 @@ use crate::{
     alg::newton::{NewtonParams, NewtonsMethodSolution, newtons_method},
 };
 
-pub struct BarrierProblem<'a, P: CostFunction> {
+struct BarrierProblem<'a, P: CostFunction> {
     problem: &'a mut P,
     accuracy: P::F,
     const_buffer: Vec<P::F>,
@@ -35,7 +35,7 @@ where
 
         debug_assert_eq!(
             self.const_buffer.len(),
-            self.problem.number_of_constraints()
+            self.problem.num_convex_constraints()
         );
         self.problem
             .convex_constraints(param, &mut self.const_buffer);
@@ -67,7 +67,7 @@ where
 
         debug_assert_eq!(
             self.const_grad_buffer.len(),
-            self.problem.number_of_constraints()
+            self.problem.num_convex_constraints()
         );
 
         self.problem
@@ -102,7 +102,7 @@ where
 
         debug_assert_eq!(
             self.const_hess_buffer.len(),
-            self.problem.number_of_constraints()
+            self.problem.num_convex_constraints()
         );
 
         self.problem
@@ -134,12 +134,22 @@ where
     P: LinearConstraints + ConvexConstraints,
     P::F: Scalar + Real + Inv<Output = P::F> + Sum,
 {
-    fn mat_a(&self) -> nalgebra::DMatrix<Self::F> {
-        self.problem.mat_a()
+    fn num_linear_constraints(&self) -> usize {
+        self.problem.num_linear_constraints()
     }
 
-    fn vec_b(&self) -> nalgebra::DVector<Self::F> {
-        self.problem.vec_b()
+    fn mat_a<S>(&self, out: &mut Matrix<Self::F, Dyn, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn, Dyn>,
+    {
+        self.problem.mat_a(out)
+    }
+
+    fn vec_b<S>(&self, out: &mut Vector<Self::F, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn>,
+    {
+        self.problem.vec_b(out)
     }
 }
 
@@ -150,8 +160,8 @@ where
     P::F: Scalar + Inv<Output = P::F> + Sum + Float + NumAssign,
 {
     #[inline]
-    fn number_of_constraints(&self) -> usize {
-        self.problem.number_of_constraints()
+    fn num_convex_constraints(&self) -> usize {
+        self.problem.num_convex_constraints()
     }
 
     fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
@@ -184,6 +194,7 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct BarrierParams<F> {
     t0: F,
     mu: F,
@@ -230,10 +241,13 @@ where
         + FromPrimitive,
     S: Storage<P::F, Dyn> + Debug,
 {
-    let nconstr = problem.number_of_constraints();
+    let nconstr = problem.num_convex_constraints();
     let mut constraints = vec![P::F::zero(); nconstr];
     problem.convex_constraints(x0, &mut constraints);
-    assert!(constraints.iter().all(|&x| x <= P::F::zero()));
+    assert!(
+        constraints.iter().all(|&x| x <= P::F::zero()),
+        "The initial condition must be feasible. Use `barrier_method_infeasible` for infeasible starts"
+    );
 
     let nvar = problem.dims();
 
@@ -252,8 +266,11 @@ where
     loop {
         let new_x = newtons_method(&mut barrier, &x, &params.center_params).arg;
 
-        // println!("=====  Step  =====");
-        // println!("Cost = {}", problem.cost(&x));
+        let mut cost = P::F::zero();
+        barrier.cost(&new_x, &mut cost);
+        println!("=====  Step  =====");
+        println!("Cost = {cost}");
+        // println!("S = {}", new_x[new_x.len() - 1]);
 
         x = new_x;
 
@@ -279,6 +296,210 @@ where
     // println!("cost = {}", sol.cost);
     // println!("bcost = {}", bcost);
     // println!("cnvx = {:?}", constraints.as_slice());
+
+    sol
+}
+
+struct AuxiliaryProblem<'a, P> {
+    problem: &'a mut P,
+}
+
+impl<'a, P> AuxiliaryProblem<'a, P> {
+    fn new(problem: &'a mut P) -> Self {
+        Self { problem }
+    }
+}
+
+impl<'a, P> CostFunction for AuxiliaryProblem<'a, P>
+where
+    P: CostFunction,
+    P::F: Copy,
+{
+    type F = P::F;
+
+    fn cost<S>(&mut self, param: &Vector<Self::F, Dyn, S>, out: &mut Self::F)
+    where
+        S: RawStorage<Self::F, Dyn> + Debug,
+    {
+        *out = param[self.problem.dims()];
+    }
+
+    fn dims(&self) -> usize {
+        self.problem.dims() + 1
+    }
+}
+
+impl<'a, P> Gradient for AuxiliaryProblem<'a, P>
+where
+    P: Gradient,
+    P::F: Copy + One,
+{
+    fn gradient<S1, S2>(
+        &mut self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut Vector<Self::F, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn> + Debug,
+    {
+        let s = self.problem.dims();
+        out[0] = P::F::one();
+        self.problem
+            .gradient(&param.rows_range(..s), &mut out.rows_range_mut(..s));
+    }
+}
+
+impl<'a, P> Hessian for AuxiliaryProblem<'a, P>
+where
+    P: Hessian,
+    P::F: Copy + One,
+{
+    fn hessian<S1, S2>(
+        &mut self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
+    {
+        let s = self.problem.dims();
+        self.problem
+            .hessian(&param.rows_range(..s), &mut out.view_range_mut(..s, ..s));
+    }
+}
+
+impl<'a, P> LinearConstraints for AuxiliaryProblem<'a, P>
+where
+    P: LinearConstraints,
+    P::F: Copy,
+{
+    #[inline]
+    fn num_linear_constraints(&self) -> usize {
+        self.problem.num_linear_constraints()
+    }
+
+    fn mat_a<S>(&self, out: &mut Matrix<Self::F, Dyn, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn, Dyn>,
+    {
+        let s = self.problem.dims();
+        self.problem.mat_a(&mut out.view_range_mut(.., ..s));
+    }
+
+    fn vec_b<S>(&self, out: &mut Vector<Self::F, Dyn, S>)
+    where
+        S: StorageMut<Self::F, Dyn>,
+    {
+        self.problem.vec_b(&mut out.rows_range_mut(..));
+    }
+}
+
+impl<'a, P> ConvexConstraints for AuxiliaryProblem<'a, P>
+where
+    P: ConvexConstraints,
+    P::F: Copy + One + NumAssign,
+{
+    #[inline]
+    fn num_convex_constraints(&self) -> usize {
+        self.problem.num_convex_constraints()
+    }
+
+    fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
+    where
+        S: RawStorage<Self::F, Dyn> + Debug,
+    {
+        let s = self.problem.dims();
+        self.problem.convex_constraints(&param.rows_range(..s), out);
+        let s = param[s];
+        out.iter_mut().for_each(|x| *x -= s);
+    }
+
+    fn convex_gradients<S1, S2>(
+        &self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut [Vector<Self::F, Dyn, S2>],
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn> + Debug,
+    {
+        let s = self.problem.dims();
+        self.problem.convex_gradients(&param.rows_range(..s), out);
+        out.iter_mut().for_each(|x| x[s] = P::F::one());
+    }
+
+    fn convex_hessians<S1, S2>(
+        &self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut [Matrix<Self::F, Dyn, Dyn, S2>],
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
+    {
+        let s = self.problem.dims();
+        self.problem.convex_hessians(&param.rows_range(..s), out);
+    }
+}
+
+pub fn barrier_method_infeasible<P, S>(
+    problem: &mut P,
+    x0: &Vector<P::F, Dyn, S>,
+    params: &BarrierParams<P::F>,
+) -> NewtonsMethodSolution<P::F>
+where
+    P: Hessian + ConvexConstraints + PrimalDual,
+    P::F: Debug
+        + Float
+        + Scalar
+        + NumAssign
+        + ComplexField<RealField = P::F>
+        + PartialOrd
+        + Real
+        + One
+        + Sum
+        + Inv<Output = P::F>
+        + Zero
+        + FromPrimitive,
+    S: Storage<P::F, Dyn> + Debug,
+{
+    let nconstr = problem.num_convex_constraints();
+    let mut constraints = vec![P::F::zero(); nconstr];
+    problem.convex_constraints(x0, &mut constraints);
+
+    let max = constraints
+        .into_iter()
+        .max_by(|x, y| x.partial_cmp(y).unwrap())
+        .expect("There should be at least one convex constraint. If it is not needed, use Newton's method instead");
+
+    let mut new_x0 = DVector::zeros(x0.len() + 1);
+    new_x0.rows_mut(0, x0.len()).copy_from(&x0);
+    new_x0[x0.len()] = max + P::F::one();
+
+    // Solve the auxiliary problem
+    let mut inf_params = params.clone();
+    let mut aux = AuxiliaryProblem::new(problem);
+
+    let t0 = std::time::Instant::now();
+
+    let sol = loop {
+        let sol = barrier_method(&mut aux, &new_x0, &inf_params);
+
+        println!("Cost: {}", sol.cost);
+
+        if sol.cost < P::F::zero() {
+            break sol;
+        }
+
+        let one = P::F::one();
+        let mu = &mut inf_params.mu;
+        *mu = one + (*mu - one) * P::F::from_f64(0.5).unwrap();
+    };
+
+    println!("Phase I: {:?}", t0.elapsed());
+
+    let t1 = std::time::Instant::now();
+    let sol = barrier_method(problem, &sol.arg.rows(0, problem.dims()), params);
+
+    println!("Phase II: {:?}", t1.elapsed());
 
     sol
 }
