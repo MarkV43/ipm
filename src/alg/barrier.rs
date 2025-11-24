@@ -347,18 +347,19 @@ where
     P: Gradient,
     P::F: Copy + One,
 {
+    #[inline]
     fn gradient<S1, S2>(
         &mut self,
-        param: &Vector<Self::F, Dyn, S1>,
+        _param: &Vector<Self::F, Dyn, S1>,
         out: &mut Vector<Self::F, Dyn, S2>,
     ) where
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn> + Debug,
     {
         let s = self.problem.dims();
-        out[0] = P::F::one();
-        self.problem
-            .gradient(&param.rows_range(..s), &mut out.rows_range_mut(..s));
+        out[s] = P::F::one();
+        // self.problem
+        // .gradient(&param.rows_range(..s), &mut out.rows_range_mut(..s));
     }
 }
 
@@ -369,15 +370,15 @@ where
 {
     fn hessian<S1, S2>(
         &mut self,
-        param: &Vector<Self::F, Dyn, S1>,
-        out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
+        _param: &Vector<Self::F, Dyn, S1>,
+        _out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
     ) where
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
-        let s = self.problem.dims();
-        self.problem
-            .hessian(&param.rows_range(..s), &mut out.view_range_mut(..s, ..s));
+        // let s = self.problem.dims();
+        // self.problem
+        // .hessian(&param.rows_range(..s), &mut out.view_range_mut(..s, ..s));
     }
 }
 
@@ -500,23 +501,11 @@ where
     let mut inf_params = aux_params.clone();
     let t0 = std::time::Instant::now();
 
-    let sol = loop {
-        let sol = barrier_method(&mut aux, &new_x0, &inf_params);
+    let sol = barrier_method(&mut aux, &new_x0, &inf_params);
 
-        println!("Cost: {}", sol.cost);
-
-        if sol.cost < P::F::zero() {
-            break sol;
-        }
-
-        let one = P::F::one();
-        let mu = &mut inf_params.mu;
-        *mu = one + (*mu - one) * P::F::from_f64(0.1).unwrap();
-
-        if *mu < P::F::from_f64(1.0 + 1e-8).unwrap() {
-            panic!("Can't find feasible solution")
-        }
-    };
+    if sol.cost >= P::F::zero() {
+        panic!("Can't find feasible solution");
+    }
 
     println!("Phase I: {:?}", t0.elapsed());
 

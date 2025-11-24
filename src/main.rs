@@ -139,10 +139,10 @@ fn main() {
     let lparams = LineSearchParams::new(0.3, 0.7);
 
     let nparams = NewtonParams::new(1e-8, lparams.clone(), 128, 1024);
-    let bparams = BarrierParams::new(0.1, 10.0, 1e-3, nparams);
+    let bparams = BarrierParams::new(1.0, 10.0, 1e-3, nparams);
 
-    let anparams = NewtonParams::new(1e-8, lparams, 4, 16);
-    let abparams = BarrierParams::new(1e-3, 10.0, 1e-1, anparams);
+    let anparams = NewtonParams::new(1e-5, lparams, 4, 16);
+    let abparams = BarrierParams::new(1e-3, 30.0, 1e-1, anparams);
 
     let x0 = DVector::from_vec(vec![1.0, 1.0]);
 
