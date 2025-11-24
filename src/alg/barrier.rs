@@ -13,6 +13,8 @@ use crate::{
 struct BarrierProblem<'a, P: CostFunction> {
     problem: &'a mut P,
     accuracy: P::F,
+
+    // Buffers (Data)
     const_buffer: Vec<P::F>,
     const_grad_buffer: Vec<DVector<P::F>>,
     const_hess_buffer: Vec<DMatrix<P::F>>,
@@ -121,10 +123,16 @@ where
             .zip(self.const_grad_buffer.iter().zip(self.const_buffer.iter()))
         {
             let ci = c.inv(); // 1 / f_i
+            let ci_sq = ci * ci;
+            let alpha = -h * ci_sq;
+
+            *out += hi * (ci * h);
+            out.ger(alpha, &g, &g, P::F::one());
+
             // term = (H_f / f_i) - (g g^T / f_i^2)
-            let term = hi * ci - (g * g.transpose()) * (ci * ci);
+            // let term = hi * ci - (g * g.transpose()) * (ci * ci);
             // multiply by h and add to total Hessian
-            *out += term * h;
+            // *out += term * h;
         }
     }
 }
@@ -268,8 +276,8 @@ where
 
         let mut cost = P::F::zero();
         barrier.cost(&new_x, &mut cost);
-        println!("=====  Step  =====");
-        println!("Cost = {cost}");
+        // println!("=====  Step  =====");
+        // println!("Cost = {cost}");
         // println!("S = {}", new_x[new_x.len() - 1]);
 
         x = new_x;
@@ -483,7 +491,7 @@ where
     let sol = loop {
         let sol = barrier_method(&mut aux, &new_x0, &inf_params);
 
-        println!("Cost: {}", sol.cost);
+        // println!("Cost: {}", sol.cost);
 
         if sol.cost < P::F::zero() {
             break sol;

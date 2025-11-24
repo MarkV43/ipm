@@ -96,10 +96,17 @@ where
         let new_v = dxv.rows_range(dims..);
         let dv = new_v - &v;
 
+        let directional_derivative = gradient.dot(&dx);
+        let mut current_cost = P::F::zero();
+        problem.cost(&x, &mut current_cost);
+
+        let xv = stack![x; v];
+
         let t = backtrack_line_search(
             problem,
-            &mut residual,
-            &stack![x; v],
+            current_cost,
+            directional_derivative,
+            &xv,
             &stack![dx; dv],
             &params.ls_params,
         );
@@ -107,6 +114,7 @@ where
         x += dx * t;
         v += dv * t;
 
+        problem.residual(&xv, &mut residual);
         let residual = residual.norm_squared();
 
         assert!(residual.is_finite());
