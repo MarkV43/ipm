@@ -127,7 +127,7 @@ where
             let alpha = -h * ci_sq;
 
             *out += hi * (ci * h);
-            out.ger(alpha, &g, &g, P::F::one());
+            out.ger(alpha, g, g, P::F::one());
 
             // term = (H_f / f_i) - (g g^T / f_i^2)
             // let term = hi * ci - (g * g.transpose()) * (ci * ci);
@@ -146,6 +146,7 @@ where
         self.problem.num_linear_constraints()
     }
 
+    #[allow(clippy::semicolon_if_nothing_returned)]
     fn mat_a<S>(&self, out: &mut Matrix<Self::F, Dyn, Dyn, S>)
     where
         S: StorageMut<Self::F, Dyn, Dyn>,
@@ -153,6 +154,7 @@ where
         self.problem.mat_a(out)
     }
 
+    #[allow(clippy::semicolon_if_nothing_returned)]
     fn vec_b<S>(&self, out: &mut Vector<Self::F, Dyn, S>)
     where
         S: StorageMut<Self::F, Dyn>,
@@ -172,6 +174,7 @@ where
         self.problem.num_convex_constraints()
     }
 
+    #[allow(clippy::semicolon_if_nothing_returned)]
     fn convex_constraints<S>(&self, param: &Vector<Self::F, Dyn, S>, out: &mut [Self::F])
     where
         S: RawStorage<Self::F, Dyn> + Debug,
@@ -179,6 +182,7 @@ where
         self.problem.convex_constraints(param, out)
     }
 
+    #[allow(clippy::semicolon_if_nothing_returned)]
     fn convex_gradients<S1, S2>(
         &self,
         param: &Vector<Self::F, Dyn, S1>,
@@ -190,6 +194,7 @@ where
         self.problem.convex_gradients(param, out)
     }
 
+    #[allow(clippy::semicolon_if_nothing_returned)]
     fn convex_hessians<S1, S2>(
         &self,
         param: &Vector<Self::F, Dyn, S1>,
@@ -318,7 +323,7 @@ impl<'a, P> AuxiliaryProblem<'a, P> {
     }
 }
 
-impl<'a, P> CostFunction for AuxiliaryProblem<'a, P>
+impl<P> CostFunction for AuxiliaryProblem<'_, P>
 where
     P: CostFunction,
     P::F: Copy,
@@ -337,7 +342,7 @@ where
     }
 }
 
-impl<'a, P> Gradient for AuxiliaryProblem<'a, P>
+impl<P> Gradient for AuxiliaryProblem<'_, P>
 where
     P: Gradient,
     P::F: Copy + One,
@@ -357,7 +362,7 @@ where
     }
 }
 
-impl<'a, P> Hessian for AuxiliaryProblem<'a, P>
+impl<P> Hessian for AuxiliaryProblem<'_, P>
 where
     P: Hessian,
     P::F: Copy + One,
@@ -376,7 +381,7 @@ where
     }
 }
 
-impl<'a, P> LinearConstraints for AuxiliaryProblem<'a, P>
+impl<P> LinearConstraints for AuxiliaryProblem<'_, P>
 where
     P: LinearConstraints,
     P::F: Copy,
@@ -402,7 +407,7 @@ where
     }
 }
 
-impl<'a, P> ConvexConstraints for AuxiliaryProblem<'a, P>
+impl<P> ConvexConstraints for AuxiliaryProblem<'_, P>
 where
     P: ConvexConstraints,
     P::F: Copy + One + NumAssign,
@@ -419,7 +424,10 @@ where
         let s = self.problem.dims();
         self.problem.convex_constraints(&param.rows_range(..s), out);
         let s = param[s];
-        out.iter_mut().for_each(|x| *x -= s);
+
+        for x in out.iter_mut() {
+            *x -= s;
+        }
     }
 
     fn convex_gradients<S1, S2>(
@@ -432,7 +440,10 @@ where
     {
         let s = self.problem.dims();
         self.problem.convex_gradients(&param.rows_range(..s), out);
-        out.iter_mut().for_each(|x| x[s] = P::F::one());
+
+        for x in out.iter_mut() {
+            x[s] = P::F::one();
+        }
     }
 
     fn convex_hessians<S1, S2>(
@@ -451,7 +462,8 @@ where
 pub fn barrier_method_infeasible<P, S>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
-    params: &BarrierParams<P::F>,
+    bar_params: &BarrierParams<P::F>,
+    aux_params: &BarrierParams<P::F>,
 ) -> NewtonsMethodSolution<P::F>
 where
     P: Hessian + ConvexConstraints + PrimalDual,
@@ -479,19 +491,19 @@ where
         .expect("There should be at least one convex constraint. If it is not needed, use Newton's method instead");
 
     let mut new_x0 = DVector::zeros(x0.len() + 1);
-    new_x0.rows_mut(0, x0.len()).copy_from(&x0);
+    new_x0.rows_mut(0, x0.len()).copy_from(x0);
     new_x0[x0.len()] = max + P::F::one();
 
     // Solve the auxiliary problem
-    let mut inf_params = params.clone();
     let mut aux = AuxiliaryProblem::new(problem);
 
+    let mut inf_params = aux_params.clone();
     let t0 = std::time::Instant::now();
 
     let sol = loop {
         let sol = barrier_method(&mut aux, &new_x0, &inf_params);
 
-        // println!("Cost: {}", sol.cost);
+        println!("Cost: {}", sol.cost);
 
         if sol.cost < P::F::zero() {
             break sol;
@@ -499,13 +511,17 @@ where
 
         let one = P::F::one();
         let mu = &mut inf_params.mu;
-        *mu = one + (*mu - one) * P::F::from_f64(0.5).unwrap();
+        *mu = one + (*mu - one) * P::F::from_f64(0.1).unwrap();
+
+        if *mu < P::F::from_f64(1.0 + 1e-8).unwrap() {
+            panic!("Can't find feasible solution")
+        }
     };
 
     println!("Phase I: {:?}", t0.elapsed());
 
     let t1 = std::time::Instant::now();
-    let sol = barrier_method(problem, &sol.arg.rows(0, problem.dims()), params);
+    let sol = barrier_method(problem, &sol.arg.rows(0, problem.dims()), bar_params);
 
     println!("Phase II: {:?}", t1.elapsed());
 

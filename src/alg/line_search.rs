@@ -1,8 +1,8 @@
-use nalgebra::{ComplexField, Dyn, Scalar, Storage, StorageMut, Vector};
-use num_traits::{Float, FromPrimitive, Num, NumAssign, One, Zero, real::Real};
-use std::{fmt::Debug, ops::Neg};
+use nalgebra::{Dyn, Storage, Vector};
+use num_traits::{FromPrimitive, Num, NumAssign, One, Zero};
+use std::fmt::Debug;
 
-use crate::{ConvexConstraints, CostFunction, PrimalDual};
+use crate::ConvexConstraints;
 
 #[derive(Clone, Debug)]
 pub struct LineSearchParams<F> {
