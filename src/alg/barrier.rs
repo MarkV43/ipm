@@ -498,14 +498,11 @@ where
     // Solve the auxiliary problem
     let mut aux = AuxiliaryProblem::new(problem);
 
-    let mut inf_params = aux_params.clone();
     let t0 = std::time::Instant::now();
 
-    let sol = barrier_method(&mut aux, &new_x0, &inf_params);
+    let sol = barrier_method(&mut aux, &new_x0, aux_params);
 
-    if sol.cost >= P::F::zero() {
-        panic!("Can't find feasible solution");
-    }
+    assert!(sol.cost < P::F::zero(), "Can't find feasible solution");
 
     println!("Phase I: {:?}", t0.elapsed());
 
