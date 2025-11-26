@@ -144,7 +144,7 @@ fn main() {
     let anparams = NewtonParams::new(1e-5, lparams, 4, 16);
     let abparams = BarrierParams::new(1e-3, 30.0, 1e-1, anparams);
 
-    let x0 = DVector::from_vec(vec![1.0, 1.0]);
+    let x0 = DVector::from_vec(vec![0.0, 0.0]);
 
     let t0 = Instant::now();
 

@@ -86,9 +86,10 @@ where
         let new_b = -stack![gradient; &mat_a * &x - &vec_b]; // new_b
 
         let dxv = new_a
+            .clone()
             .cholesky()
-            .expect("Failed to compute Cholesky decomposition")
-            .solve(&new_b);
+            .map(|x| x.solve(&new_b))
+            .unwrap_or_else(|| new_a.try_inverse().expect("Failed to invert matrix A") * new_b);
 
         // let dxv = new_a.try_inverse().unwrap() * new_b;
         let dx = dxv.rows(0, dims);
