@@ -1,4 +1,4 @@
-use std::{fmt::Debug, iter::Sum};
+use std::{fmt::Debug, iter::Sum, ops::Neg};
 
 use nalgebra::{
     ComplexField, DMatrix, DVector, Dyn, Matrix, RawStorage, Scalar, Storage, StorageMut, Vector,
@@ -7,7 +7,8 @@ use num_traits::{Float, FromPrimitive, Inv, Num, NumAssign, One, Zero, real::Rea
 
 use crate::{
     ConvexConstraints, CostFunction, Gradient, Hessian, LinearConstraints, PrimalDual,
-    alg::newton::{NewtonParams, NewtonsMethodSolution, newtons_method},
+    alg::newton::{NewtonParams, NewtonsMethodSolution, newtons_method_with_observer},
+    observer::{SolverObserver, SolverStep},
 };
 
 struct BarrierProblem<'a, P: CostFunction> {
@@ -233,34 +234,25 @@ impl<F> BarrierParams<F> {
     }
 }
 
-pub fn barrier_method<P, S>(
+pub fn barrier_method_with_observer<P, S, O>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
     params: &BarrierParams<P::F>,
-) -> NewtonsMethodSolution<P::F>
+    observer: &mut O,
+) -> Result<NewtonsMethodSolution<P::F>, String>
 where
     P: Hessian + ConvexConstraints + PrimalDual,
-    P::F: Debug
-        + Float
-        + Scalar
-        + NumAssign
-        + ComplexField<RealField = P::F>
-        + PartialOrd
-        + Real
-        + One
-        + Sum
-        + Inv<Output = P::F>
-        + Zero
-        + FromPrimitive,
+    P::F: Float + Scalar + NumAssign + ComplexField<RealField = P::F> + Sum + Inv<Output = P::F>,
     S: Storage<P::F, Dyn> + Debug,
+    O: SolverObserver<P::F>,
 {
     let nconstr = problem.num_convex_constraints();
     let mut constraints = vec![P::F::zero(); nconstr];
     problem.convex_constraints(x0, &mut constraints);
-    assert!(
-        constraints.iter().all(|&x| x <= P::F::zero()),
-        "The initial condition must be feasible. Use `barrier_method_infeasible` for infeasible starts"
-    );
+
+    if constraints.iter().any(|&x| x >= P::F::zero()) {
+        return Err("The initial condition must be feasible. Use `barrier_method_infeasible` for infeasible starts".to_owned());
+    }
 
     let nvar = problem.dims();
 
@@ -277,13 +269,13 @@ where
     let mut x = x0.clone_owned();
 
     loop {
-        let new_x = newtons_method(&mut barrier, &x, &params.center_params).arg;
+        observer.on_step(SolverStep::BarrierIter(barrier.accuracy));
+
+        let new_x =
+            newtons_method_with_observer(&mut barrier, &x, &params.center_params, observer)?.arg;
 
         let mut cost = P::F::zero();
         barrier.cost(&new_x, &mut cost);
-        // println!("=====  Step  =====");
-        // println!("Cost = {cost}");
-        // println!("S = {}", new_x[new_x.len() - 1]);
 
         x = new_x;
 
@@ -310,7 +302,20 @@ where
     // println!("bcost = {}", bcost);
     // println!("cnvx = {:?}", constraints.as_slice());
 
-    sol
+    Ok(sol)
+}
+
+pub fn barrier_method<P, S>(
+    problem: &mut P,
+    x0: &Vector<P::F, Dyn, S>,
+    params: &BarrierParams<P::F>,
+) -> Result<NewtonsMethodSolution<P::F>, String>
+where
+    P: Hessian + ConvexConstraints + PrimalDual,
+    P::F: Float + Scalar + NumAssign + ComplexField<RealField = P::F> + Sum + Inv<Output = P::F>,
+    S: Storage<P::F, Dyn> + Debug,
+{
+    barrier_method_with_observer(problem, x0, params, &mut ())
 }
 
 struct AuxiliaryProblem<'a, P> {
@@ -326,7 +331,7 @@ impl<'a, P> AuxiliaryProblem<'a, P> {
 impl<P> CostFunction for AuxiliaryProblem<'_, P>
 where
     P: CostFunction,
-    P::F: Copy,
+    P::F: Copy + FromPrimitive + ComplexField<RealField = P::F>,
 {
     type F = P::F;
 
@@ -334,7 +339,12 @@ where
     where
         S: RawStorage<Self::F, Dyn> + Debug,
     {
-        *out = param[self.problem.dims()];
+        let s_idx = self.problem.dims();
+        let s_val = param[s_idx];
+
+        let x = param.rows(0, s_idx);
+        let reg = P::F::from_f64(1e-4).unwrap() * x.norm_squared();
+        *out = s_val + reg;
     }
 
     fn dims(&self) -> usize {
@@ -345,47 +355,62 @@ where
 impl<P> Gradient for AuxiliaryProblem<'_, P>
 where
     P: Gradient,
-    P::F: Copy + One,
+    P::F: Copy + FromPrimitive + One + Neg<Output = P::F> + ComplexField<RealField = P::F>,
 {
     #[inline]
     fn gradient<S1, S2>(
         &mut self,
-        _param: &Vector<Self::F, Dyn, S1>,
+        param: &Vector<Self::F, Dyn, S1>,
         out: &mut Vector<Self::F, Dyn, S2>,
     ) where
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn> + Debug,
     {
-        let s = self.problem.dims();
-        out[s] = P::F::one();
-        // self.problem
-        // .gradient(&param.rows_range(..s), &mut out.rows_range_mut(..s));
+        let s_idx = self.problem.dims();
+        let x = param.rows(0, s_idx);
+
+        // FIX: Gradient of regularization term: 2 * 1e-4 * x
+        let coef = P::F::from_f64(2.0 * 1e-4).unwrap();
+
+        // Calculate gradient for x part
+        let mut grad_x = out.rows_mut(0, s_idx);
+        grad_x.copy_from(&x);
+        grad_x *= coef;
+
+        // Gradient for s part is 1
+        out[s_idx] = P::F::one();
     }
 }
 
 impl<P> Hessian for AuxiliaryProblem<'_, P>
 where
     P: Hessian,
-    P::F: Copy + One,
+    P::F: Copy + FromPrimitive + One + Neg<Output = P::F> + ComplexField<RealField = P::F>,
 {
     fn hessian<S1, S2>(
         &mut self,
         _param: &Vector<Self::F, Dyn, S1>,
-        _out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
+        out: &mut Matrix<Self::F, Dyn, Dyn, S2>,
     ) where
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
-        // let s = self.problem.dims();
-        // self.problem
-        // .hessian(&param.rows_range(..s), &mut out.view_range_mut(..s, ..s));
+        let s_idx = self.problem.dims();
+
+        // FIX: Hessian is 2 * 1e-4 * I for the x-block, 0 for s-block
+        let coef = P::F::from_f64(2.0 * 1e-4).unwrap();
+
+        out.fill(P::F::zero());
+
+        let mut block = out.view_mut((0, 0), (s_idx, s_idx));
+        block.fill_diagonal(coef);
     }
 }
 
 impl<P> LinearConstraints for AuxiliaryProblem<'_, P>
 where
     P: LinearConstraints,
-    P::F: Copy,
+    P::F: Copy + FromPrimitive + ComplexField<RealField = P::F>,
 {
     #[inline]
     fn num_linear_constraints(&self) -> usize {
@@ -411,7 +436,7 @@ where
 impl<P> ConvexConstraints for AuxiliaryProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Copy + One + NumAssign,
+    P::F: Float + Scalar + NumAssign + ComplexField<RealField = P::F> + Sum + Neg<Output = P::F>,
 {
     #[inline]
     fn num_convex_constraints(&self) -> usize {
@@ -443,7 +468,7 @@ where
         self.problem.convex_gradients(&param.rows_range(..s), out);
 
         for x in out.iter_mut() {
-            x[s] = P::F::one();
+            x[s] = -P::F::one();
         }
     }
 
@@ -460,27 +485,18 @@ where
     }
 }
 
-pub fn barrier_method_infeasible<P, S>(
+pub fn barrier_method_infeasible_with_observer<P, S, O>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
     bar_params: &BarrierParams<P::F>,
     aux_params: &BarrierParams<P::F>,
-) -> NewtonsMethodSolution<P::F>
+    observer: &mut O,
+) -> Result<NewtonsMethodSolution<P::F>, String>
 where
     P: Hessian + ConvexConstraints + PrimalDual,
-    P::F: Debug
-        + Float
-        + Scalar
-        + NumAssign
-        + ComplexField<RealField = P::F>
-        + PartialOrd
-        + Real
-        + One
-        + Sum
-        + Inv<Output = P::F>
-        + Zero
-        + FromPrimitive,
+    P::F: Float + Scalar + NumAssign + ComplexField<RealField = P::F> + Sum + Inv<Output = P::F>,
     S: Storage<P::F, Dyn> + Debug,
+    O: SolverObserver<P::F>,
 {
     let nconstr = problem.num_convex_constraints();
     let mut constraints = vec![P::F::zero(); nconstr];
@@ -489,7 +505,7 @@ where
     let max = constraints
         .into_iter()
         .max_by(|x, y| x.partial_cmp(y).unwrap())
-        .expect("There should be at least one convex constraint. If it is not needed, use Newton's method instead");
+        .ok_or("There should be at least one convex constraint. If it is not needed, use Newton's method instead".to_owned())?;
 
     let mut new_x0 = DVector::zeros(x0.len() + 1);
     new_x0.rows_mut(0, x0.len()).copy_from(x0);
@@ -498,18 +514,36 @@ where
     // Solve the auxiliary problem
     let mut aux = AuxiliaryProblem::new(problem);
 
-    let t0 = std::time::Instant::now();
+    observer.on_step(SolverStep::BarrierPhase(1));
 
-    let sol = barrier_method(&mut aux, &new_x0, aux_params);
+    let sol = barrier_method_with_observer(&mut aux, &new_x0, aux_params, observer)?;
 
-    assert!(sol.cost < P::F::zero(), "Can't find feasible solution");
+    if sol.cost >= P::F::zero() {
+        return Err("Couldn't find feasible solution".to_owned());
+    }
 
-    println!("Phase I: {:?}", t0.elapsed());
+    observer.on_step(SolverStep::BarrierPhase(2));
 
-    let t1 = std::time::Instant::now();
-    let sol = barrier_method(problem, &sol.arg.rows(0, problem.dims()), bar_params);
+    let sol = barrier_method_with_observer(
+        problem,
+        &sol.arg.rows(0, problem.dims()),
+        bar_params,
+        observer,
+    )?;
 
-    println!("Phase II: {:?}", t1.elapsed());
+    Ok(sol)
+}
 
-    sol
+pub fn barrier_method_infeasible<P, S>(
+    problem: &mut P,
+    x0: &Vector<P::F, Dyn, S>,
+    bar_params: &BarrierParams<P::F>,
+    aux_params: &BarrierParams<P::F>,
+) -> Result<NewtonsMethodSolution<P::F>, String>
+where
+    P: Hessian + ConvexConstraints + PrimalDual,
+    P::F: Float + Scalar + NumAssign + ComplexField<RealField = P::F> + Sum + Inv<Output = P::F>,
+    S: Storage<P::F, Dyn> + Debug,
+{
+    barrier_method_infeasible_with_observer(problem, x0, bar_params, aux_params, &mut ())
 }

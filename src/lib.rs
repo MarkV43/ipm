@@ -1,6 +1,10 @@
 #![warn(clippy::pedantic)]
 #![deny(clippy::perf)]
-#![allow(clippy::toplevel_ref_arg, clippy::missing_panics_doc)]
+#![allow(
+    clippy::toplevel_ref_arg,
+    clippy::missing_panics_doc,
+    clippy::missing_errors_doc
+)]
 
 use nalgebra::{
     DMatrix, DVector, Dyn, Matrix, RawStorage, Scalar, Storage, StorageMut, Vector, stack,
@@ -9,6 +13,7 @@ use num_traits::NumAssign;
 use std::fmt::Debug;
 
 pub mod alg;
+pub mod observer;
 
 pub trait CostFunction
 where

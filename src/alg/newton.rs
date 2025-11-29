@@ -1,6 +1,7 @@
 use crate::{
     ConvexConstraints, Hessian, LinearConstraints, PrimalDual,
     alg::line_search::{LineSearchParams, backtrack_line_search},
+    observer::{SolverObserver, SolverStep},
 };
 use nalgebra::{ComplexField, DMatrix, DVector, Dyn, OVector, Scalar, Storage, Vector, stack};
 use num_traits::{FromPrimitive, Num, NumAssign, Zero};
@@ -35,12 +36,12 @@ impl<F> NewtonParams<F> {
     }
 }
 
-#[must_use]
-pub fn newtons_method<P, S>(
+pub fn newtons_method_with_observer<P, S, O>(
     problem: &mut P,
     x0: &Vector<P::F, Dyn, S>,
     params: &NewtonParams<P::F>,
-) -> NewtonsMethodSolution<P::F>
+    observer: &mut O,
+) -> Result<NewtonsMethodSolution<P::F>, String>
 where
     P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual,
     P::F: Debug
@@ -52,6 +53,7 @@ where
         + FromPrimitive
         + Zero,
     S: Storage<P::F, Dyn> + Debug,
+    O: SolverObserver<P::F>,
 {
     let tol2 = params.tolerance * params.tolerance;
 
@@ -89,7 +91,7 @@ where
             .clone()
             .cholesky()
             .map(|x| x.solve(&new_b))
-            .unwrap_or_else(|| new_a.try_inverse().expect("Failed to invert matrix A") * new_b);
+            .ok_or("Matrix `new_a` is singular".to_owned())?;
 
         // let dxv = new_a.try_inverse().unwrap() * new_b;
         let dx = dxv.rows(0, dims);
@@ -100,6 +102,14 @@ where
         let directional_derivative = gradient.dot(&dx);
         let mut current_cost = P::F::zero();
         problem.cost(&x, &mut current_cost);
+
+        let step = SolverStep::NewtonsPoint {
+            primal: &x.clone_owned(),
+            dual: &v.clone_owned(),
+            cost: current_cost,
+        };
+
+        observer.on_step(step);
 
         let xv = stack![x; v];
 
@@ -133,5 +143,25 @@ where
     let mut cost = P::F::zero();
     problem.cost(&x, &mut cost);
 
-    NewtonsMethodSolution { cost, arg: x }
+    Ok(NewtonsMethodSolution { cost, arg: x })
+}
+
+pub fn newtons_method<P, S>(
+    problem: &mut P,
+    x0: &Vector<P::F, Dyn, S>,
+    params: &NewtonParams<P::F>,
+) -> Result<NewtonsMethodSolution<P::F>, String>
+where
+    P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual,
+    P::F: Debug
+        + Scalar
+        + NumAssign
+        + ComplexField<RealField = P::F>
+        + PartialOrd
+        + Copy
+        + FromPrimitive
+        + Zero,
+    S: Storage<P::F, Dyn> + Debug,
+{
+    newtons_method_with_observer(problem, x0, params, &mut ())
 }
