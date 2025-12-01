@@ -1,33 +1,16 @@
 use nalgebra::{Dyn, Storage, Vector};
-use num_traits::{FromPrimitive, Num, NumAssign, One, Zero};
+use num_traits::{FromPrimitive, NumAssign, One, Zero};
 use std::fmt::Debug;
 
-use crate::ConvexConstraints;
+use crate::{ConvexConstraints, alg::line_search::backtrack::BacktrackParams};
 
-#[derive(Clone, Debug)]
-pub struct LineSearchParams<F> {
-    pub(crate) alpha: F,
-    pub(crate) beta: F,
-}
-
-impl<F> LineSearchParams<F> {
-    pub fn new(alpha: F, beta: F) -> Self
-    where
-        F: Num + FromPrimitive + PartialOrd,
-    {
-        assert!(F::zero() < alpha && alpha < F::from_f32(0.5).unwrap());
-        assert!(F::zero() < beta && beta < F::one());
-        Self { alpha, beta }
-    }
-}
-
-pub fn backtrack_line_search<P, S1, S2>(
+pub fn guarded_line_search<P, S1, S2>(
     problem: &mut P,
     current_cost: P::F,             // Pass the current cost
     gradient_dot_step: P::F,        // Directional derivative (grad^T * step)
     xv: &Vector<P::F, Dyn, S1>,     // Current position
     dir_xv: &Vector<P::F, Dyn, S2>, // Search direction
-    params: &LineSearchParams<P::F>,
+    params: &BacktrackParams<P::F>,
 ) -> P::F
 where
     P: ConvexConstraints, // Note: We need CostFunction, not just PrimalDual

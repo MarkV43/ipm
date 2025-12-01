@@ -1,6 +1,8 @@
 use crate::{
     ConvexConstraints, Hessian, LinearConstraints, PrimalDual,
-    alg::line_search::{LineSearchParams, backtrack_line_search},
+    alg::line_search::{
+        LineSearch, backtrack::backtrack_line_search, guarded::guarded_line_search,
+    },
     observer::{SolverObserver, SolverStep},
 };
 use nalgebra::{ComplexField, DMatrix, DVector, Dyn, OVector, Scalar, Storage, Vector, stack};
@@ -15,14 +17,14 @@ pub struct NewtonsMethodSolution<F: Scalar> {
 
 #[derive(Clone, Debug)]
 pub struct NewtonParams<F> {
-    tolerance: F,
-    ls_params: LineSearchParams<F>,
-    min_its: usize,
-    max_its: usize,
+    pub(crate) tolerance: F,
+    pub(crate) ls_params: LineSearch<F>,
+    pub(crate) min_its: usize,
+    pub(crate) max_its: usize,
 }
 
 impl<F> NewtonParams<F> {
-    pub fn new(tolerance: F, ls_params: LineSearchParams<F>, min_its: usize, max_its: usize) -> Self
+    pub fn new(tolerance: F, ls_params: LineSearch<F>, min_its: usize, max_its: usize) -> Self
     where
         F: Num + PartialOrd,
     {
@@ -113,14 +115,19 @@ where
 
         let xv = stack![x; v];
 
-        let t = backtrack_line_search(
-            problem,
-            current_cost,
-            directional_derivative,
-            &xv,
-            &stack![dx; dv],
-            &params.ls_params,
-        );
+        let t = match &params.ls_params {
+            LineSearch::Backtracking(backtrack_params) => {
+                backtrack_line_search(problem, current_cost, &x, &dx, backtrack_params)
+            }
+            LineSearch::Guarded(backtrack_params) => guarded_line_search(
+                problem,
+                current_cost,
+                directional_derivative,
+                &xv,
+                &stack![dx; dv],
+                backtrack_params,
+            ),
+        };
 
         x += dx * t;
         v += dv * t;

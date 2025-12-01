@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use nalgebra::{DVector, Scalar};
 use num_traits::Zero;
 
@@ -19,7 +21,7 @@ impl<F> SolverObserver<F> for () {
     fn on_step(&mut self, _: SolverStep<'_, F>) {}
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PathPoint<F> {
     pub aux: Option<F>,
     pub primal: DVector<F>,
@@ -78,5 +80,19 @@ impl<F: Scalar> SolverObserver<F> for PathRecorder<F> {
             }
             SolverStep::BarrierPhase(phase) => self.phase = phase,
         }
+    }
+}
+
+impl<F: Debug> Debug for PathPoint<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PathPoint")
+            .field("aux", &self.aux)
+            .field("primal", &self.primal.as_slice())
+            .field("dual", &self.dual.as_slice())
+            .field("iter", &self.iter)
+            .field("phase", &self.phase)
+            .field("cost", &self.cost)
+            .field("accuracy", &self.accuracy)
+            .finish()
     }
 }

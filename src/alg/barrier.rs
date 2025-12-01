@@ -7,7 +7,11 @@ use num_traits::{Float, FromPrimitive, Inv, Num, NumAssign, One, Zero, real::Rea
 
 use crate::{
     ConvexConstraints, CostFunction, Gradient, Hessian, LinearConstraints, PrimalDual,
-    alg::newton::{NewtonParams, NewtonsMethodSolution, newtons_method_with_observer},
+    alg::descent::{
+        DescentMethod,
+        newton::{NewtonsMethodSolution, newtons_method_with_observer},
+        steepest::steepest_descent_method_with_observer,
+    },
     observer::{SolverObserver, SolverStep},
 };
 
@@ -213,11 +217,11 @@ pub struct BarrierParams<F> {
     t0: F,
     mu: F,
     tolerance: F,
-    center_params: NewtonParams<F>,
+    center_params: DescentMethod<F>,
 }
 
 impl<F> BarrierParams<F> {
-    pub fn new(t0: F, mu: F, tolerance: F, center_params: NewtonParams<F>) -> Self
+    pub fn new(t0: F, mu: F, tolerance: F, center_params: DescentMethod<F>) -> Self
     where
         F: Num + PartialOrd,
     {
@@ -271,11 +275,15 @@ where
     loop {
         observer.on_step(SolverStep::BarrierIter(barrier.accuracy));
 
-        let new_x =
-            newtons_method_with_observer(&mut barrier, &x, &params.center_params, observer)?.arg;
-
-        let mut cost = P::F::zero();
-        barrier.cost(&new_x, &mut cost);
+        let new_x = match &params.center_params {
+            DescentMethod::NewtonsMethod(newton_params) => {
+                newtons_method_with_observer(&mut barrier, &x, newton_params, observer)?.arg
+            }
+            DescentMethod::SteepestDescent(steepest_params) => {
+                steepest_descent_method_with_observer(&mut barrier, &x, steepest_params, observer)?
+                    .arg
+            }
+        };
 
         x = new_x;
 
@@ -295,12 +303,6 @@ where
     let sol = NewtonsMethodSolution { cost, arg: x };
 
     problem.convex_constraints(&sol.arg, &mut constraints);
-
-    // println!("\n");
-    // println!("x = {:?}", sol.arg.as_slice());
-    // println!("cost = {}", sol.cost);
-    // println!("bcost = {}", bcost);
-    // println!("cnvx = {:?}", constraints.as_slice());
 
     Ok(sol)
 }
