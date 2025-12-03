@@ -1,7 +1,8 @@
 use crate::{
     ConvexConstraints, Hessian, LinearConstraints, PrimalDual,
-    alg::line_search::{
-        LineSearch, backtrack::backtrack_line_search, guarded::guarded_line_search,
+    alg::{
+        descent::{DescentMethod, DescentSolution},
+        line_search::LineSearch,
     },
     observer::{SolverObserver, SolverStep},
 };
@@ -16,159 +17,144 @@ pub struct NewtonsMethodSolution<F: Scalar> {
 }
 
 #[derive(Clone, Debug)]
-pub struct NewtonParams<F> {
+pub struct NewtonsMethod<F, L: LineSearch<F = F>> {
     pub(crate) tolerance: F,
-    pub(crate) ls_params: LineSearch<F>,
+    pub(crate) line_search: L,
     pub(crate) min_its: usize,
     pub(crate) max_its: usize,
 }
 
-impl<F> NewtonParams<F> {
-    pub fn new(tolerance: F, ls_params: LineSearch<F>, min_its: usize, max_its: usize) -> Self
+impl<F, L: LineSearch<F = F>> NewtonsMethod<F, L> {
+    pub fn new(tolerance: F, line_search: L, min_its: usize, max_its: usize) -> Result<Self, String>
     where
         F: Num + PartialOrd,
     {
-        assert!(F::zero() < tolerance);
-        Self {
+        if F::zero() >= tolerance {
+            return Err("tolerance must be strictly positive".to_owned());
+        }
+
+        Ok(Self {
             tolerance,
-            ls_params,
+            line_search,
             min_its,
             max_its,
-        }
+        })
     }
 }
 
-pub fn newtons_method_with_observer<P, S, O>(
-    problem: &mut P,
-    x0: &Vector<P::F, Dyn, S>,
-    params: &NewtonParams<P::F>,
-    observer: &mut O,
-) -> Result<NewtonsMethodSolution<P::F>, String>
-where
-    P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual,
-    P::F: Debug
-        + Scalar
-        + NumAssign
-        + ComplexField<RealField = P::F>
-        + PartialOrd
-        + Copy
-        + FromPrimitive
-        + Zero,
-    S: Storage<P::F, Dyn> + Debug,
-    O: SolverObserver<P::F>,
-{
-    let tol2 = params.tolerance * params.tolerance;
+impl<F: Scalar, L: LineSearch<F = F>> DescentMethod for NewtonsMethod<F, L> {
+    type F = F;
 
-    let dims = problem.dims();
-    let nconstr = problem.num_linear_constraints();
+    fn optimize_observe<P, S, O>(
+        &self,
+        problem: &mut P,
+        x0: &Vector<F, Dyn, S>,
+        observer: &mut O,
+    ) -> Result<super::DescentSolution<F>, String>
+    where
+        P: Hessian
+            + LinearConstraints
+            + ConvexConstraints
+            + PrimalDual
+            + crate::CostFunction<F = F>,
+        F: Debug
+            + Scalar
+            + NumAssign
+            + ComplexField<RealField = F>
+            + PartialOrd
+            + Copy
+            + FromPrimitive
+            + Zero,
+        S: Storage<F, Dyn> + Debug,
+        O: SolverObserver<F>,
+    {
+        let tol2 = self.tolerance * self.tolerance;
 
-    let mut mat_a = DMatrix::zeros(nconstr, dims);
-    let mut vec_b = DVector::zeros(nconstr);
+        let dims = problem.dims();
+        let nconstr = problem.num_linear_constraints();
 
-    problem.mat_a(&mut mat_a);
-    problem.vec_b(&mut vec_b);
+        let mut mat_a = DMatrix::zeros(nconstr, dims);
+        let mut vec_b = DVector::zeros(nconstr);
 
-    let mat_at = mat_a.transpose();
+        problem.mat_a(&mut mat_a);
+        problem.vec_b(&mut vec_b);
 
-    let mut x = x0.clone_owned();
-    let mut v = DVector::zeros(mat_a.nrows());
+        let mat_at = mat_a.transpose();
 
-    let mut its = 0;
+        let mut x = x0.clone_owned();
+        let mut v = DVector::zeros(mat_a.nrows());
 
-    let mut hessian = DMatrix::zeros(dims, dims);
-    let mut gradient = DVector::zeros(dims);
+        let mut its = 0;
 
-    let mut residual = DVector::zeros(x.nrows() + v.nrows());
+        let mut hessian = DMatrix::zeros(dims, dims);
+        let mut gradient = DVector::zeros(dims);
 
-    // let mut dxv;
+        let mut residual = DVector::zeros(x.nrows() + v.nrows());
 
-    loop {
-        problem.hessian(&x, &mut hessian);
-        problem.gradient(&x, &mut gradient);
+        // let mut dxv;
 
-        let new_a = stack![hessian, &mat_at; &mat_a, 0];
-        let new_b = -stack![gradient; &mat_a * &x - &vec_b]; // new_b
+        loop {
+            problem.hessian(&x, &mut hessian);
+            problem.gradient(&x, &mut gradient);
 
-        let dxv = new_a
-            .clone()
-            .cholesky()
-            .map(|x| x.solve(&new_b))
-            .ok_or("Matrix `new_a` is singular".to_owned())?;
+            let new_a = stack![hessian, &mat_at; &mat_a, 0];
+            let new_b = -stack![gradient; &mat_a * &x - &vec_b]; // new_b
 
-        // let dxv = new_a.try_inverse().unwrap() * new_b;
-        let dx = dxv.rows(0, dims);
+            let dxv = new_a
+                .clone()
+                .cholesky()
+                .map(|x| x.solve(&new_b))
+                .ok_or("Matrix `new_a` is singular".to_owned())?;
 
-        let new_v = dxv.rows_range(dims..);
-        let dv = new_v - &v;
+            // let dxv = new_a.try_inverse().unwrap() * new_b;
+            let dx = dxv.rows(0, dims);
 
-        let directional_derivative = gradient.dot(&dx);
-        let mut current_cost = P::F::zero();
-        problem.cost(&x, &mut current_cost);
+            let new_v = dxv.rows_range(dims..);
+            let dv = new_v - &v;
 
-        let step = SolverStep::NewtonsPoint {
-            primal: &x.clone_owned(),
-            dual: &v.clone_owned(),
-            cost: current_cost,
-        };
+            let directional_derivative = gradient.dot(&dx);
+            let mut current_cost = P::F::zero();
+            problem.cost(&x, &mut current_cost);
 
-        observer.on_step(step);
+            let step = SolverStep::NewtonsPoint {
+                primal: &x.clone_owned(),
+                dual: &v.clone_owned(),
+                cost: current_cost,
+            };
 
-        let xv = stack![x; v];
+            observer.on_step(step);
 
-        let t = match &params.ls_params {
-            LineSearch::Backtracking(backtrack_params) => {
-                backtrack_line_search(problem, current_cost, &x, &dx, backtrack_params)
-            }
-            LineSearch::Guarded(backtrack_params) => guarded_line_search(
+            let xv = stack![x; v];
+
+            let t = self.line_search.search(
                 problem,
                 current_cost,
                 directional_derivative,
                 &xv,
                 &stack![dx; dv],
-                backtrack_params,
-            ),
-        };
+            );
 
-        x += dx * t;
-        v += dv * t;
+            x += dx * t;
+            v += dv * t;
 
-        problem.residual(&xv, &mut residual);
-        let residual = residual.norm_squared();
+            problem.residual(&xv, &mut residual);
+            let residual = residual.norm_squared();
 
-        assert!(residual.is_finite());
+            assert!(residual.is_finite());
 
-        if residual <= tol2
-            || its >= params.min_its && dxv.norm_squared() < tol2
-            || its > params.max_its
-        {
-            break;
+            if residual <= tol2
+                || its >= self.min_its && dxv.norm_squared() < tol2
+                || its > self.max_its
+            {
+                break;
+            }
+
+            its += 1;
         }
 
-        its += 1;
+        let mut cost = P::F::zero();
+        problem.cost(&x, &mut cost);
+
+        Ok(DescentSolution { cost, arg: x })
     }
-
-    let mut cost = P::F::zero();
-    problem.cost(&x, &mut cost);
-
-    Ok(NewtonsMethodSolution { cost, arg: x })
-}
-
-pub fn newtons_method<P, S>(
-    problem: &mut P,
-    x0: &Vector<P::F, Dyn, S>,
-    params: &NewtonParams<P::F>,
-) -> Result<NewtonsMethodSolution<P::F>, String>
-where
-    P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual,
-    P::F: Debug
-        + Scalar
-        + NumAssign
-        + ComplexField<RealField = P::F>
-        + PartialOrd
-        + Copy
-        + FromPrimitive
-        + Zero,
-    S: Storage<P::F, Dyn> + Debug,
-{
-    newtons_method_with_observer(problem, x0, params, &mut ())
 }

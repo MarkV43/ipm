@@ -3,20 +3,17 @@ use std::{fmt::Debug, iter::Sum};
 use nalgebra::{ComplexField, Dyn, OVector, Scalar, Storage, Vector};
 use num_traits::{Float, Inv, NumAssign};
 
-use crate::{
-    ConvexConstraints, CostFunction, Hessian, LinearConstraints, PrimalDual,
-    observer::SolverObserver,
-};
+use crate::{ConvexConstraints, CostFunction, Hessian, PrimalDual, observer::SolverObserver};
 
-pub mod newton;
-pub mod steepest;
+pub mod barrier;
+pub mod infeasible;
 
-pub struct DescentSolution<F: Scalar> {
+pub struct IpmSolution<F: Scalar> {
     pub arg: OVector<F, Dyn>,
     pub cost: F,
 }
 
-pub trait DescentMethod {
+pub trait InteriorPointMethod {
     type F: Scalar;
 
     fn optimize_observe<P, S, O>(
@@ -24,9 +21,9 @@ pub trait DescentMethod {
         problem: &mut P,
         x0: &Vector<P::F, Dyn, S>,
         observer: &mut O,
-    ) -> Result<DescentSolution<P::F>, String>
+    ) -> Result<IpmSolution<P::F>, String>
     where
-        P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual + CostFunction<F = Self::F>,
+        P: Hessian + ConvexConstraints + PrimalDual + CostFunction<F = Self::F>,
         P::F:
             Float + Scalar + NumAssign + ComplexField<RealField = P::F> + Sum + Inv<Output = P::F>,
         S: Storage<P::F, Dyn> + Debug,
@@ -36,9 +33,9 @@ pub trait DescentMethod {
         &self,
         problem: &mut P,
         x0: &Vector<P::F, Dyn, S>,
-    ) -> Result<DescentSolution<P::F>, String>
+    ) -> Result<IpmSolution<P::F>, String>
     where
-        P: Hessian + LinearConstraints + ConvexConstraints + PrimalDual + CostFunction<F = Self::F>,
+        P: Hessian + ConvexConstraints + PrimalDual + CostFunction<F = Self::F>,
         P::F:
             Float + Scalar + NumAssign + ComplexField<RealField = P::F> + Sum + Inv<Output = P::F>,
         S: Storage<P::F, Dyn> + Debug,

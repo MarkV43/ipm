@@ -1,3 +1,3 @@
-pub mod barrier;
 pub mod descent;
+pub mod ipm;
 pub mod line_search;
