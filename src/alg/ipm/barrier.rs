@@ -3,7 +3,7 @@ use std::{fmt::Debug, iter::Sum};
 use nalgebra::{
     ComplexField, DMatrix, DVector, Dyn, Matrix, RawStorage, Scalar, Storage, StorageMut, Vector,
 };
-use num_traits::{Float, Inv, Num, NumAssign, One, Zero, real::Real};
+use num_traits::{Float, Inv, Num, NumAssign, One, Zero};
 
 use crate::{
     ConvexConstraints, CostFunction, Gradient, Hessian, LinearConstraints, PrimalDual,
@@ -14,7 +14,10 @@ use crate::{
     observer::{SolverObserver, SolverStep},
 };
 
-struct BarrierProblem<'a, P: CostFunction> {
+struct BarrierProblem<'a, P: CostFunction>
+where
+    P::F: ComplexField<RealField = P::F>,
+{
     problem: &'a mut P,
     accuracy: P::F,
 
@@ -27,7 +30,7 @@ struct BarrierProblem<'a, P: CostFunction> {
 impl<P> CostFunction for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Real + Inv<Output = P::F> + Sum,
+    P::F: Inv<Output = P::F> + Sum + ComplexField<RealField = P::F> + Copy,
 {
     type F = P::F;
 
@@ -39,15 +42,23 @@ where
         let mut cost = P::F::zero();
         self.problem.cost(param, &mut cost);
 
+        let m_size = self.problem.matrix_constraint_size();
+        let mut matrix_buffer = DMatrix::zeros(m_size, m_size);
+
         debug_assert_eq!(
             self.const_buffer.len(),
             self.problem.num_convex_constraints()
         );
         self.problem
             .convex_constraints(param, &mut self.const_buffer);
+        self.problem.matrix_constraints(param, &mut matrix_buffer);
 
-        let h = -self.accuracy.inv();
-        let res = cost + h * self.const_buffer.iter().map(|&x| (-x).ln()).sum();
+        let cnvx_barrier = self.const_buffer.iter().map(|&x| (-x).ln()).sum();
+
+        let matrix_cholesky = matrix_buffer.cholesky().unwrap();
+        let matrix_barrier = matrix_cholesky.ln_determinant();
+
+        let res = self.accuracy * cost - cnvx_barrier - matrix_barrier;
         *out = res;
     }
 
@@ -59,7 +70,7 @@ where
 impl<P> Gradient for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Scalar + Real + Inv<Output = P::F> + Sum + NumAssign,
+    P::F: Scalar + ComplexField<RealField = P::F> + Inv<Output = P::F> + Sum + NumAssign + Copy,
 {
     fn gradient<S1, S2>(
         &mut self,
@@ -71,6 +82,8 @@ where
     {
         self.problem.gradient(param, out);
 
+        *out *= self.accuracy;
+
         debug_assert_eq!(
             self.const_grad_buffer.len(),
             self.problem.num_convex_constraints()
@@ -81,20 +94,28 @@ where
         self.problem
             .convex_gradients(param, &mut self.const_grad_buffer);
 
-        // barrier multiplier (must be negative)
-        let h = -self.accuracy.inv();
-
         for (g, c) in self.const_grad_buffer.iter().zip(self.const_buffer.iter()) {
             let ci = c.inv(); // 1 / f_i
-            *out += g * h * ci; // add h * g / f_i
+            *out -= g * ci; // add h * g / f_i
         }
+
+        let m_size = self.problem.matrix_constraint_size();
+        let mut matrix_buffer = DMatrix::zeros(m_size, m_size);
+        self.problem.matrix_constraints(param, &mut matrix_buffer);
+        let matrix_cholesky = matrix_buffer.cholesky().unwrap();
+        let cholesky_inv = matrix_cholesky.inverse();
+        let inv_flat = DVector::from_column_slice(cholesky_inv.as_slice());
+
+        let mut out_p = out.rows_range_mut(self.problem.matrix_contraints_range());
+
+        out_p -= inv_flat;
     }
 }
 
 impl<P> Hessian for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Scalar + Real + Inv<Output = P::F> + Sum + NumAssign,
+    P::F: Scalar + ComplexField<RealField = P::F> + Inv<Output = P::F> + Sum + NumAssign + Copy,
 {
     fn hessian<S1, S2>(
         &mut self,
@@ -105,6 +126,8 @@ where
         S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
         self.problem.hessian(param, out);
+
+        *out *= self.accuracy;
 
         debug_assert_eq!(
             self.const_hess_buffer.len(),
@@ -118,25 +141,33 @@ where
         self.problem
             .convex_constraints(param, &mut self.const_buffer);
 
-        // barrier multiplier (must be negative)
-        let h = -self.accuracy.inv();
-
-        for (hi, (g, c)) in self
+        for (h, (g, c)) in self
             .const_hess_buffer
             .iter()
             .zip(self.const_grad_buffer.iter().zip(self.const_buffer.iter()))
         {
             let ci = c.inv(); // 1 / f_i
             let ci_sq = ci * ci;
-            let alpha = -h * ci_sq;
 
-            *out += hi * (ci * h);
-            out.ger(alpha, g, g, P::F::one());
+            *out -= h * ci;
+            out.ger(ci_sq, g, g, -P::F::one());
+        }
 
-            // term = (H_f / f_i) - (g g^T / f_i^2)
-            // let term = hi * ci - (g * g.transpose()) * (ci * ci);
-            // multiply by h and add to total Hessian
-            // *out += term * h;
+        let m_size = self.problem.matrix_constraint_size();
+        let mut matrix_buffer = DMatrix::zeros(m_size, m_size);
+        self.problem.matrix_constraints(param, &mut matrix_buffer);
+        let matrix_cholesky = matrix_buffer.cholesky().unwrap();
+        let inv = matrix_cholesky.inverse();
+        let kron = inv.kronecker(&inv);
+
+        let p_range = self.problem.matrix_contraints_range();
+
+        let mut out_p = out.view_range_mut(p_range.clone(), p_range);
+
+        if out_p.nrows() == kron.nrows() {
+            out_p -= kron;
+        } else {
+            panic!("Hessian dimension mismatch: Is your param vector just the matrix P?");
         }
     }
 }
@@ -144,7 +175,7 @@ where
 impl<P> LinearConstraints for BarrierProblem<'_, P>
 where
     P: LinearConstraints + ConvexConstraints,
-    P::F: Scalar + Real + Inv<Output = P::F> + Sum,
+    P::F: Scalar + ComplexField<RealField = P::F> + Inv<Output = P::F> + Sum + NumAssign + Copy,
 {
     fn num_linear_constraints(&self) -> usize {
         self.problem.num_linear_constraints()
@@ -171,7 +202,7 @@ where
 impl<P> ConvexConstraints for BarrierProblem<'_, P>
 where
     P: ConvexConstraints,
-    P::F: Scalar + Inv<Output = P::F> + Sum + Float + NumAssign,
+    P::F: Scalar + ComplexField<RealField = P::F> + Inv<Output = P::F> + Sum + NumAssign + Copy,
 {
     #[inline]
     fn num_convex_constraints(&self) -> usize {
@@ -208,6 +239,21 @@ where
         S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
     {
         self.problem.convex_hessians(param, out)
+    }
+
+    fn matrix_constraints<S1, S2>(
+        &self,
+        param: &Vector<Self::F, Dyn, S1>,
+        out: &mut nalgebra::SquareMatrix<Self::F, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
+    {
+        self.problem.matrix_constraints(param, out);
+    }
+
+    fn matrix_constraint_size(&self) -> usize {
+        self.problem.matrix_constraint_size()
     }
 }
 

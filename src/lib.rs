@@ -7,10 +7,11 @@
 )]
 
 use nalgebra::{
-    DMatrix, DVector, Dyn, Matrix, RawStorage, Scalar, Storage, StorageMut, Vector, stack,
+    DMatrix, DVector, Dyn, Matrix, RawStorage, Scalar, SquareMatrix, Storage, StorageMut, Vector,
+    stack,
 };
 use num_traits::NumAssign;
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Range};
 
 pub mod alg;
 pub mod observer;
@@ -91,6 +92,25 @@ pub trait ConvexConstraints: Hessian {
     ) where
         S1: RawStorage<Self::F, Dyn> + Debug,
         S2: StorageMut<Self::F, Dyn, Dyn> + Debug;
+
+    fn matrix_constraints<S1, S2>(
+        &self,
+        _param: &Vector<Self::F, Dyn, S1>,
+        _out: &mut SquareMatrix<Self::F, Dyn, S2>,
+    ) where
+        S1: RawStorage<Self::F, Dyn> + Debug,
+        S2: StorageMut<Self::F, Dyn, Dyn> + Debug,
+    {
+        // do nothing by default
+    }
+
+    fn matrix_constraint_size(&self) -> usize {
+        0
+    }
+
+    fn matrix_contraints_range(&self) -> Range<usize> {
+        0..0
+    }
 }
 
 pub trait PrimalDual: Gradient + LinearConstraints
